@@ -1,0 +1,61 @@
+# --- 系统文件 ---
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+*.bak
+
+# --- IDE / 编辑器 ---
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.user
+
+# --- 日志 & 临时文件 ---
+*.log
+*.tmp
+temp/
+tmp/
+
+# --- 环境 & 密钥 ---
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+secrets/
+
+# --- 依赖目录 ---
+node_modules/
+vendor/
+.bundle/
+_packages/
+
+# --- 构建产物 ---
+dist/
+build/
+out/
+target/
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# --- 项目特定（按需修改） ---
+# data/
