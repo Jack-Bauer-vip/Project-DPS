@@ -1,0 +1,19 @@
+# qteasy_research 依赖清单
+# 使用方式：pip install -r requirements.txt
+
+qteasy>=2.6.0
+tushare>=1.2.89
+numpy>=1.26.0,<2.0.0
+pandas>=2.0.0
+matplotlib>=3.5.0
+mistune>=3.0.0
+akshare>=1.18.0
+
+# 可选依赖
+# PySide6>=6.6          # 原生桌面研究工作台
+# openpyxl>=3.0.0     # Excel 报告生成
+# scipy>=1.10.0       # 风险平价优化
+# scikit-learn        # 逻辑回归概率合成
+
+# 开发依赖
+# pytest>=7.0.0

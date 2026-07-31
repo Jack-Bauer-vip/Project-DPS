@@ -59,3 +59,18 @@ env/
 
 # --- 项目特定（按需修改） ---
 # data/
+research_engines/qteasy_lab/research_store/
+research_engines/qteasy_lab/.venv/
+research_engines/qteasy_lab/data/
+research_engines/qteasy_lab/logs/
+research_engines/qteasy_lab/outputs/
+research_engines/qteasy_lab/reports/
+research_engines/qteasy_lab/backtests/
+research_engines/qteasy_lab/structure.txt
+research_engines/qteasy_lab/scripts/新建 文本文档.txt
+qteasy_report_view_*/
+
+# --- 本地 Agent / 工具配置 ---
+.agents/
+.claude/
+skills-lock.json

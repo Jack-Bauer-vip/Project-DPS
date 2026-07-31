@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=64.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "qteasy_research"
+version = "0.1.0"
+description = "基于 qteasy 的 ETF 量化研究与回测工具包"
+authors = [{name = "Bern"}]
+requires-python = ">=3.11"
+dependencies = [
+    "qteasy>=2.6.0",
+    "tushare>=1.2.89",
+    "numpy>=1.26.0,<2.0.0",
+    "pandas>=2.0.0",
+    "matplotlib>=3.5.0",
+    "mistune>=3.0.0",
+]
+
+[project.optional-dependencies]
+desktop = ["PySide6>=6.6"]
+
+[project.urls]
+Homepage = "https://github.com/shepherdpp/qteasy"
+Documentation = "https://qteasy.readthedocs.io/"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["qteasy_research*"]
