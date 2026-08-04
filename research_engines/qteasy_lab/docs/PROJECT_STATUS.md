@@ -44,12 +44,12 @@ OK
 - 12 条 DRAFT 宏观规则写入 `global_etf_macro_rule`（含样本起止、置信度）；
 - 其中 5 条 APPROVED（real_yield_up/down 状态，样本 ≥60 且非中性）；
 - SPY/TLT/GLD 研究配置已启用（enabled=1, status=ENABLED）；
-- 引擎真实评分可运行，输出落 `data/global_etf_values/`。
+- 引擎真实评分可运行，输出落 `data/global_etf_values/`；
+- 桌面端新增全球 ETF 宏观研究页面（`GlobalEtfPage`，已接线主窗口导航）。
 
 ## 未完成
 
 - 利率状态（rate_up/rate_down）样本 <60 个月，仍为 DRAFT/CANDIDATE，尚未 APPROVED（等样本积累到 60，约 2027 年再人工复核）；
-- GlobalEtfEngine 桌面端页面（P2）；
 - 全球研究资产与交易资产映射（P3）；
 - 宏观规则版本比较和规则审核 UI。
 

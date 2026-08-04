@@ -23,18 +23,22 @@
 - 利率状态（rate_up/rate_down）样本约 2027 年前后达到 60 个月，届时人工复核后再 APPROVED。
 - 当前状态三元组因缺 rate_up/curve_normal 的 APPROVED 规则而返回 `PARTIAL`，属预期安全行为。
 
-## P2：桌面端全球 ETF 页面
+## P2：桌面端全球 ETF 页面（已完成）
 
-增加全球 ETF 宏观研究页面，展示：
+新增 `GlobalEtfPage`（desktop/global_etf_page.py），展示：
 
-- 数据状态和数据截至日期；
-- 当前宏观状态；
-- DGS30/DGS10 代理及精度提示；
-- SPY/TLT/GLD 基础评分和宏观修正；
-- 支持因子与冲突因子；
-- 条件收益表；
-- 研究规则状态；
-- 重新计算和查看 Notebook 结果。
+- ✅ 数据状态和数据截至日期（各序列截至日 + 质量等级）；
+- ✅ 当前宏观状态（宏观状态枚举 + 引擎状态）；
+- ✅ DGS30/DGS10 代理及精度提示（利率代理 + 降级警告）；
+- ✅ SPY/TLT/GLD 基础评分和宏观修正（评分表格）；
+- ✅ 支持因子与冲突因子（评分表格列）；
+- ✅ 条件收益表（Notebook 产出 CSV）；
+- ✅ 研究规则状态（DRAFT/APPROVED 明细）；
+- ✅ 重新计算（后台线程 worker）与查看 Notebook 结果。
+
+页面接线进主窗口导航（"全球ETF宏观"），`data_root` 默认取 `store_root.parent/data`。
+
+## P3：研究资产和交易资产映射
 
 ## P3：研究资产和交易资产映射
 

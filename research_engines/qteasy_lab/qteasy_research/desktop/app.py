@@ -41,6 +41,9 @@ def launch() -> int:
     except ImportError as exc:
         raise RuntimeError("桌面端需要 PySide6，请执行：pip install -e \".[desktop]\"") from exc
 
+    from qteasy_research.desktop.factor_page import FactorResearchPage
+    from qteasy_research.desktop.data_page import DataManagementPage
+    from qteasy_research.desktop.global_etf_page import GlobalEtfPage
     from qteasy_research.pretrade import (
         add_asset_reference,
         add_project_decision,
@@ -151,7 +154,8 @@ def launch() -> int:
             root_layout = QHBoxLayout(root)
             root_layout.setContentsMargins(0, 0, 0, 0)
             nav = QListWidget()
-            nav.addItems(["研究项目", "新建研究", "策略导入", "系统设置"])
+            nav.setObjectName("main-navigation")
+            nav.addItems(["研究项目", "新建研究", "因子研究", "数据管理", "全球ETF宏观", "策略导入", "系统设置"])
             nav.setFixedWidth(190)
             self.pages = QStackedWidget()
             root_layout.addWidget(nav)
@@ -161,9 +165,20 @@ def launch() -> int:
 
             self.project_page = self._build_project_page()
             self.new_page = self._build_new_page()
+            self.factor_page = FactorResearchPage(store_dir, self)
+            self.factor_page.status_message.connect(lambda message: self.statusBar().showMessage(message))
+            self.factor_page.diagnostic_action.connect(self._handle_factor_diagnostic_action)
+            self.data_page = DataManagementPage(
+                store_dir,
+                initial_mode=settings.get("data_manager_mode", "direct"),
+                parent=self,
+            )
+            self.data_page.status_message.connect(lambda message: self.statusBar().showMessage(message))
+            self.global_etf_page = GlobalEtfPage(store_dir, parent=self)
+            self.global_etf_page.status_message.connect(lambda message: self.statusBar().showMessage(message))
             self.strategy_page = self._build_strategy_page()
             self.settings_page = self._build_settings_page()
-            for page in (self.project_page, self.new_page, self.strategy_page, self.settings_page):
+            for page in (self.project_page, self.new_page, self.factor_page, self.data_page, self.global_etf_page, self.strategy_page, self.settings_page):
                 self.pages.addWidget(page)
             nav.setCurrentRow(0)
 
@@ -178,6 +193,9 @@ def launch() -> int:
                 QPushButton:hover { background: #28756d; }
                 QProgressBar { border: 1px solid #cfc8ba; background: #fffdf8; text-align: center; }
                 QProgressBar::chunk { background: #b68a3c; }
+                QLabel#factorTitle { color: #172525; font-size: 22px; font-weight: 700; }
+                QLabel#factorDetailTitle { color: #1e5b55; font-size: 18px; font-weight: 700; }
+                QLabel#dataTitle { color: #172525; font-size: 22px; font-weight: 700; }
             """)
             self.refresh_projects()
 
@@ -1198,15 +1216,34 @@ def launch() -> int:
             }
             self.source_status_label.setText(f"当前顺序：{orders.get(self.data_mode_input.currentData(), '未配置')}")
 
+        def _handle_factor_diagnostic_action(self, action: str, payload: object) -> None:
+            data = payload if isinstance(payload, dict) else {}
+            if action in {"open_data", "prepare_factor"}:
+                self.data_page.prepare_from_factor_diagnostic(
+                    list(data.get("codes") or []),
+                    str(data.get("asset_type") or "ETF"),
+                    str(data.get("factor_id") or "") or None,
+                )
+                self.pages.setCurrentWidget(self.data_page)
+                self.statusBar().showMessage("已打开数据管理，请按提示更新行情并生成因子数据。")
+                return
+            if action == "open_factor_config":
+                self.pages.setCurrentWidget(self.factor_page)
+                self.statusBar().showMessage("请检查相关因子的资产类型、投资期限和启用配置。")
+
         def save_settings(self):
             nonlocal store_dir
             store_dir = Path(self.store_input.text()).expanduser()
             store_dir.mkdir(parents=True, exist_ok=True)
+            self.factor_page.set_store_root(store_dir)
+            self.data_page.set_store_root(store_dir)
+            self.global_etf_page.set_store_root(store_dir)
             save_settings({
                 "store_dir": str(store_dir),
                 "default_horizon": "medium",
                 "default_update_policy": "reuse",
                 "data_mode": self.data_mode_input.currentData(),
+                "data_manager_mode": self.data_page.mode,
                 "evidence_research": self.evidence_input.isChecked(),
                 "indicator_config": {
                     "macd_fast": self.macd_fast_input.value(),
