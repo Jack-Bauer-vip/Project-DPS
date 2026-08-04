@@ -37,6 +37,13 @@
 - 利率状态样本 52<60 时不破例 APPROVED，保持 DRAFT，等样本积累到 60（约 2027 年）再人工复核。
 - 当前状态三元组缺 rate_up/curve_normal 的 APPROVED 规则时引擎返回 `PARTIAL`（base_score 可算，宏观修正为空），属预期安全行为，不是失败。
 
+## 数据窗口决策（2026-08-04 记录）
+
+- SPY/TLT/GLD 数据窗口统一保持 **2003 起**，不因 rate_up 样本不足而单独扩 SPY 到 1993。
+- 理由：① 即使 SPY/rate_up 扩到样本 69 并 APPROVED，当前宏观状态含 curve_normal（无数据、永不落库），引擎仍 PARTIAL、final_score 仍为空；② SPY/rate_up 现窗口 modifier=1.00（NEUTRAL），APPROVED 也不改变评分；③ 单独扩 SPY 破坏三者统一窗口，TLT/GLD 受上市日硬限制（2002/2004）无法同步扩。
+- 引擎在当前宏观状态返回 PARTIAL（base_score 可算，final_score 为空）为常态，属安全设计，不自动改变。
+- rate_up 需等样本自然积累到 60（约 2027 年）再人工复核；届时若宏观状态不含无数据分量，评分可能 COMPLETED。
+
 ## 安全边界
 
 - 不自动修改正式资产池。
