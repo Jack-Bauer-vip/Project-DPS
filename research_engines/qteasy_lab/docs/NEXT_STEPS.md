@@ -40,14 +40,19 @@
 
 ## P3：研究资产和交易资产映射
 
-## P3：研究资产和交易资产映射
+### 数据模型层（已完成）
 
-后续再增加：
+- 新增 `global_etf_trade_mapping` 表：研究资产↔交易资产 1:N 映射，结构化字段含汇率（fx_pair/fx_rule/exchange_rate）、管理费（management_fee）、交易成本（trading_cost_bps）、跟踪误差（tracking_error）、折溢价（premium_discount）、交易时区/时段/休市风险（market_timezone/trading_hours/holiday_risk）、优先级（priority）、状态（ACTIVE/INACTIVE）。
+- 存储方法：`upsert_global_etf_trade_mapping`（含存在性与取值范围校验）、`list_global_etf_trade_mappings`（多条件过滤 + priority 排序）、`get_global_etf_trade_mappings`（默认 ACTIVE）。
+- 消费侧辅助（`core/global_etf_trade_mapping.py`）：`effective_trade_mapping`（ACTIVE + min priority）、`initialize_default_global_etf_trade_mappings`（可选 self_mapping，默认不写行）。
+- `global_etf_definition.trade_asset_code` 弃用，映射以新表为准。
+- GlobalEtfEngine 保持纯净，不携带映射；未配置 = 返回空（派生状态）。
 
-- 研究资产与交易资产映射；
-- 汇率差异；
-- 管理费和交易成本；
-- 跟踪误差和折溢价；
-- 海外交易时差和休市风险。
+### 后续（尚未开始）
+
+- 汇率差异、管理费和交易成本的换算逻辑；
+- 跟踪误差和折溢价展示；
+- 海外交易时差和休市风险在桌面端展示；
+- 桌面端交易资产映射配置 UI。
 
 仍不得自动生成交易指令或自动修改组合权重。

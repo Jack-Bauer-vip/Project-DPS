@@ -266,6 +266,183 @@ class ResearchStore:
                 )
             """)
             connection.execute("""
+                CREATE TABLE IF NOT EXISTS factor_definition (
+                    factor_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    formula TEXT NOT NULL,
+                    formula_hash TEXT NOT NULL,
+                    direction INTEGER NOT NULL DEFAULT 1,
+                    default_horizon TEXT NOT NULL DEFAULT 'medium',
+                    supported_asset_types TEXT NOT NULL DEFAULT '[]',
+                    value_scope TEXT NOT NULL DEFAULT 'asset',
+                    missing_policy TEXT NOT NULL DEFAULT 'exclude',
+                    hypothesis TEXT NOT NULL DEFAULT '',
+                    research_summary TEXT NOT NULL DEFAULT '{}',
+                    status TEXT NOT NULL DEFAULT 'DRAFT',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS factor_activation_profile (
+                    profile_id TEXT PRIMARY KEY,
+                    factor_id TEXT NOT NULL,
+                    asset_type TEXT NOT NULL,
+                    horizon TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 0,
+                    weight REAL NOT NULL DEFAULT 1.0,
+                    max_drawdown_override REAL NOT NULL DEFAULT -0.15,
+                    suspend_on_breach INTEGER NOT NULL DEFAULT 1,
+                    status TEXT NOT NULL DEFAULT 'ENABLED',
+                    suspended_at TEXT,
+                    suspend_reason TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(factor_id, asset_type, horizon)
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS etf_underlying_mapping (
+                    mapping_id TEXT PRIMARY KEY,
+                    etf_code TEXT NOT NULL,
+                    underlying_type TEXT NOT NULL,
+                    underlying_code TEXT NOT NULL,
+                    effective_date TEXT NOT NULL,
+                    expiry_date TEXT,
+                    source TEXT NOT NULL DEFAULT '',
+                    confidence REAL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(etf_code, effective_date)
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS macro_regime_config (
+                    config_id TEXT PRIMARY KEY,
+                    factor_id TEXT,
+                    category TEXT,
+                    regime TEXT NOT NULL DEFAULT 'default',
+                    modifier REAL NOT NULL DEFAULT 1.0,
+                    effective_date TEXT,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(factor_id, category, regime, effective_date)
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS global_etf_definition (
+                    asset_code TEXT PRIMARY KEY,
+                    research_asset_code TEXT NOT NULL,
+                    trade_asset_code TEXT,
+                    name TEXT NOT NULL DEFAULT '',
+                    asset_type TEXT NOT NULL DEFAULT 'GLOBAL_ETF',
+                    source TEXT NOT NULL DEFAULT '',
+                    metadata TEXT NOT NULL DEFAULT '{}',
+                    status TEXT NOT NULL DEFAULT 'ACTIVE',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS global_etf_activation_profile (
+                    profile_id TEXT PRIMARY KEY,
+                    asset_code TEXT NOT NULL,
+                    horizon TEXT NOT NULL DEFAULT 'medium',
+                    enabled INTEGER NOT NULL DEFAULT 0,
+                    frequency TEXT NOT NULL DEFAULT 'monthly',
+                    status TEXT NOT NULL DEFAULT 'ENABLED',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(asset_code, horizon)
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS global_etf_macro_rule (
+                    rule_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    asset_code TEXT NOT NULL,
+                    macro_state TEXT NOT NULL,
+                    modifier REAL NOT NULL,
+                    sample_start TEXT,
+                    sample_end TEXT,
+                    sample_count INTEGER,
+                    confidence TEXT,
+                    approved_by TEXT NOT NULL DEFAULT 'manual',
+                    approved_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    effective_date TEXT,
+                    expiry_date TEXT,
+                    status TEXT NOT NULL DEFAULT 'DRAFT',
+                    UNIQUE(asset_code, macro_state, effective_date)
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS global_etf_score_snapshot (
+                    snapshot_id TEXT PRIMARY KEY,
+                    target_date TEXT NOT NULL,
+                    asset_code TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_global_etf_approved_rule
+                ON global_etf_macro_rule(asset_code, macro_state)
+                WHERE status='APPROVED'
+            """)
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_global_etf_rule_lookup ON global_etf_macro_rule(asset_code, macro_state, status, effective_date)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_global_etf_snapshot_lookup ON global_etf_score_snapshot(asset_code, target_date)")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS global_etf_trade_mapping (
+                    mapping_id           TEXT PRIMARY KEY,
+                    research_asset_code  TEXT NOT NULL,
+                    trade_asset_code     TEXT NOT NULL,
+                    trade_asset_name     TEXT NOT NULL DEFAULT '',
+                    trade_market         TEXT NOT NULL DEFAULT '',
+                    currency             TEXT NOT NULL DEFAULT 'CNY',
+                    fx_pair              TEXT NOT NULL DEFAULT '',
+                    fx_rule              TEXT NOT NULL DEFAULT 'static',
+                    exchange_rate        REAL,
+                    management_fee       REAL NOT NULL DEFAULT 0,
+                    trading_cost_bps     REAL NOT NULL DEFAULT 0,
+                    tracking_error       REAL,
+                    premium_discount     REAL,
+                    market_timezone      TEXT NOT NULL DEFAULT '',
+                    trading_hours        TEXT NOT NULL DEFAULT '',
+                    holiday_risk         TEXT NOT NULL DEFAULT '',
+                    priority             INTEGER NOT NULL DEFAULT 1,
+                    status               TEXT NOT NULL DEFAULT 'ACTIVE',
+                    created_at           TEXT NOT NULL,
+                    updated_at           TEXT NOT NULL,
+                    UNIQUE(research_asset_code, trade_asset_code)
+                )
+            """)
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_global_etf_trade_mapping_lookup ON global_etf_trade_mapping(research_asset_code, status, priority)")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS factor_decision (
+                    decision_id TEXT PRIMARY KEY,
+                    factor_id TEXT NOT NULL,
+                    profile_id TEXT,
+                    action TEXT NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '',
+                    payload TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS factor_monitoring_snapshot (
+                    snapshot_id TEXT PRIMARY KEY,
+                    factor_id TEXT NOT NULL,
+                    as_of TEXT NOT NULL,
+                    long_return REAL,
+                    short_return REAL,
+                    long_short_return REAL,
+                    cumulative_nav REAL,
+                    drawdown REAL,
+                    max_drawdown REAL,
+                    status TEXT NOT NULL DEFAULT 'OK',
+                    payload TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                )
+            """)
+            connection.execute("""
                 CREATE TABLE IF NOT EXISTS research_portfolio_asset_context (
                     context_id TEXT PRIMARY KEY,
                     project_id TEXT NOT NULL,
@@ -369,6 +546,125 @@ class ResearchStore:
             connection.execute("CREATE INDEX IF NOT EXISTS idx_factor_research_lookup ON research_factor_research(factor_id, horizon, created_at)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_factor_exposure_lookup ON research_asset_factor_exposure(asset_code, factor_id, horizon, created_at)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_factor_match_lookup ON research_factor_match(asset_code, horizon, created_at)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_factor_activation_lookup ON factor_activation_profile(asset_type, horizon, enabled, status)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_etf_mapping_lookup ON etf_underlying_mapping(etf_code, effective_date)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_factor_monitoring_lookup ON factor_monitoring_snapshot(factor_id, as_of)")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS data_market_daily (
+                    row_id TEXT PRIMARY KEY,
+                    code TEXT NOT NULL,
+                    asset_type TEXT NOT NULL,
+                    trade_date TEXT NOT NULL,
+                    open REAL,
+                    high REAL,
+                    low REAL,
+                    close REAL,
+                    pre_close REAL,
+                    volume REAL,
+                    amount REAL,
+                    source TEXT NOT NULL,
+                    snapshot_id TEXT,
+                    available_at TEXT,
+                    revision_id TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    is_latest INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(code, trade_date, source, revision_id)
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS data_asset_metadata (
+                    row_id TEXT PRIMARY KEY,
+                    code TEXT NOT NULL,
+                    asset_type TEXT NOT NULL,
+                    field_name TEXT NOT NULL,
+                    field_value TEXT,
+                    source TEXT NOT NULL,
+                    as_of TEXT,
+                    available_at TEXT,
+                    revision_id TEXT NOT NULL,
+                    snapshot_id TEXT,
+                    is_latest INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(code, field_name, source, revision_id)
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS data_fundamental_snapshot (
+                    row_id TEXT PRIMARY KEY,
+                    code TEXT NOT NULL,
+                    metric TEXT NOT NULL,
+                    report_period TEXT,
+                    value REAL,
+                    unit TEXT,
+                    source TEXT NOT NULL,
+                    release_date TEXT,
+                    available_at TEXT,
+                    revision_id TEXT NOT NULL,
+                    snapshot_id TEXT,
+                    quality_level TEXT NOT NULL DEFAULT 'C',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(code, metric, report_period, source, revision_id)
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS data_factor_snapshot (
+                    snapshot_id TEXT PRIMARY KEY,
+                    factor_id TEXT NOT NULL,
+                    asset_type TEXT NOT NULL,
+                    horizon TEXT NOT NULL,
+                    as_of TEXT,
+                    file_path TEXT NOT NULL,
+                    manifest_path TEXT NOT NULL,
+                    row_count INTEGER NOT NULL DEFAULT 0,
+                    content_hash TEXT,
+                    formula_hash TEXT,
+                    value_semantics TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS data_update_job (
+                    job_id TEXT PRIMARY KEY,
+                    mode TEXT NOT NULL,
+                    datasets TEXT NOT NULL DEFAULT '[]',
+                    codes TEXT NOT NULL DEFAULT '[]',
+                    update_policy TEXT NOT NULL DEFAULT 'incremental',
+                    status TEXT NOT NULL,
+                    rows_added INTEGER NOT NULL DEFAULT 0,
+                    rows_updated INTEGER NOT NULL DEFAULT 0,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    error TEXT
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS data_update_attempt (
+                    attempt_id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    dataset TEXT NOT NULL,
+                    code TEXT,
+                    success INTEGER NOT NULL DEFAULT 0,
+                    request TEXT NOT NULL DEFAULT '{}',
+                    message TEXT NOT NULL DEFAULT '',
+                    as_of TEXT,
+                    rows_returned INTEGER NOT NULL DEFAULT 0,
+                    latency_ms REAL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_data_market_lookup ON data_market_daily(code, trade_date, is_latest)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_data_metadata_lookup ON data_asset_metadata(code, field_name, is_latest)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_data_factor_lookup ON data_factor_snapshot(factor_id, asset_type, horizon, created_at)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_data_job_lookup ON data_update_job(started_at, status)")
+            definition_columns = {row[1] for row in connection.execute("PRAGMA table_info(factor_definition)")}
+            for column, definition in {
+                "hypothesis": "TEXT NOT NULL DEFAULT ''",
+                "research_summary": "TEXT NOT NULL DEFAULT '{}'",
+            }.items():
+                if column not in definition_columns:
+                    connection.execute(f"ALTER TABLE factor_definition ADD COLUMN {column} {definition}")
 
     # ---------- project CRUD ----------
 
@@ -653,6 +949,555 @@ class ResearchStore:
             item["payload"] = _decode(item.get("payload")) or {}
             result.append(item)
         return result
+
+    # ---------- production factor configuration ----------
+
+    def upsert_factor_definition(self, definition: dict[str, Any]) -> dict[str, Any]:
+        now = _now()
+        payload = dict(definition)
+        payload.setdefault("supported_asset_types", [])
+        payload.setdefault("value_scope", "asset")
+        payload.setdefault("missing_policy", "exclude")
+        payload.setdefault("status", "ACTIVE")
+        payload.setdefault("created_at", now)
+        payload["updated_at"] = now
+        with self._connect() as connection:
+            previous = connection.execute(
+                "SELECT created_at FROM factor_definition WHERE factor_id=?",
+                (payload["factor_id"],),
+            ).fetchone()
+            if previous:
+                payload["created_at"] = previous["created_at"]
+            connection.execute(
+                """INSERT OR REPLACE INTO factor_definition
+                (factor_id,name,category,formula,formula_hash,direction,default_horizon,
+                 supported_asset_types,value_scope,missing_policy,hypothesis,research_summary,
+                 status,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    payload["factor_id"], payload["name"], payload["category"], payload["formula"],
+                    payload["formula_hash"], int(payload.get("direction", 1)),
+                    payload.get("default_horizon", "medium"), _json(payload["supported_asset_types"]),
+                    payload["value_scope"], payload["missing_policy"], payload.get("hypothesis", ""),
+                    _json(payload.get("research_summary", {})), payload["status"],
+                    payload["created_at"], payload["updated_at"],
+                ),
+            )
+        return payload
+
+    def list_factor_definitions(self, *, status: str | None = None) -> list[dict[str, Any]]:
+        query = "SELECT * FROM factor_definition"
+        values: tuple[Any, ...] = ()
+        if status:
+            query += " WHERE status=?"
+            values = (status,)
+        query += " ORDER BY factor_id"
+        with self._connect() as connection:
+            rows = connection.execute(query, values).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["supported_asset_types"] = _decode(item.get("supported_asset_types")) or []
+            item["research_summary"] = _decode(item.get("research_summary")) or {}
+            result.append(item)
+        return result
+
+    def upsert_factor_activation(self, profile: dict[str, Any]) -> dict[str, Any]:
+        now = _now()
+        payload = dict(profile)
+        payload.setdefault("profile_id", uuid.uuid4().hex)
+        payload.setdefault("enabled", 0)
+        payload.setdefault("weight", 1.0)
+        payload.setdefault("max_drawdown_override", -0.15)
+        payload.setdefault("suspend_on_breach", 1)
+        payload.setdefault("status", "ENABLED")
+        payload.setdefault("created_at", now)
+        payload["updated_at"] = now
+        with self._connect() as connection:
+            previous = connection.execute(
+                "SELECT profile_id,created_at FROM factor_activation_profile WHERE factor_id=? AND asset_type=? AND horizon=?",
+                (payload["factor_id"], payload["asset_type"], payload["horizon"]),
+            ).fetchone()
+            if previous:
+                payload["profile_id"] = previous["profile_id"]
+                payload["created_at"] = previous["created_at"]
+            connection.execute(
+                """INSERT OR REPLACE INTO factor_activation_profile
+                (profile_id,factor_id,asset_type,horizon,enabled,weight,max_drawdown_override,
+                 suspend_on_breach,status,suspended_at,suspend_reason,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    payload["profile_id"], payload["factor_id"], payload["asset_type"], payload["horizon"],
+                    int(payload["enabled"]), float(payload["weight"]), float(payload["max_drawdown_override"]),
+                    int(payload["suspend_on_breach"]), payload["status"], payload.get("suspended_at"),
+                    payload.get("suspend_reason"), payload["created_at"], payload["updated_at"],
+                ),
+            )
+        return payload
+
+    def list_factor_activations(
+        self, *, asset_type: str | None = None, horizon: str | None = None, enabled_only: bool = False
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        values: list[Any] = []
+        if asset_type:
+            clauses.append("p.asset_type=?")
+            values.append(asset_type)
+        if horizon:
+            clauses.append("p.horizon=?")
+            values.append(horizon)
+        if enabled_only:
+            clauses.extend(["p.enabled=1", "p.status='ENABLED'"])
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""SELECT p.*, d.name, d.category, d.formula, d.formula_hash, d.direction,
+                    d.supported_asset_types, d.value_scope, d.missing_policy
+                    , d.hypothesis, d.research_summary
+                    FROM factor_activation_profile p
+                    JOIN factor_definition d ON d.factor_id=p.factor_id
+                    {where} ORDER BY p.factor_id""",
+                values,
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["supported_asset_types"] = _decode(item.get("supported_asset_types")) or []
+            item["research_summary"] = _decode(item.get("research_summary")) or {}
+            result.append(item)
+        return result
+
+    def upsert_etf_underlying_mapping(self, mapping: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(mapping)
+        payload.setdefault("mapping_id", uuid.uuid4().hex)
+        payload.setdefault("source", "")
+        payload.setdefault("created_at", _now())
+        with self._connect() as connection:
+            previous = connection.execute(
+                "SELECT mapping_id FROM etf_underlying_mapping WHERE etf_code=? AND effective_date=?",
+                (payload["etf_code"], payload["effective_date"]),
+            ).fetchone()
+            if previous:
+                payload["mapping_id"] = previous["mapping_id"]
+            connection.execute(
+                """INSERT OR REPLACE INTO etf_underlying_mapping
+                (mapping_id,etf_code,underlying_type,underlying_code,effective_date,expiry_date,
+                 source,confidence,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?)""",
+                (
+                    payload["mapping_id"], payload["etf_code"], payload["underlying_type"],
+                    payload["underlying_code"], payload["effective_date"], payload.get("expiry_date"),
+                    payload["source"], payload.get("confidence"), payload["created_at"],
+                ),
+            )
+        return payload
+
+    def get_etf_underlying(self, etf_code: str, target_date: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT * FROM etf_underlying_mapping
+                WHERE etf_code=? AND effective_date<=?
+                  AND (expiry_date IS NULL OR expiry_date>=?)
+                ORDER BY effective_date DESC LIMIT 1""",
+                (etf_code, target_date, target_date),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def upsert_macro_modifier(self, modifier: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(modifier)
+        payload.setdefault("config_id", uuid.uuid4().hex)
+        payload.setdefault("regime", "default")
+        payload.setdefault("modifier", 1.0)
+        payload.setdefault("created_at", _now())
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT OR REPLACE INTO macro_regime_config
+                (config_id,factor_id,category,regime,modifier,effective_date,created_at)
+                VALUES (?,?,?,?,?,?,?)""",
+                (
+                    payload["config_id"], payload.get("factor_id"), payload.get("category"),
+                    payload["regime"], float(payload["modifier"]), payload.get("effective_date"),
+                    payload["created_at"],
+                ),
+            )
+        return payload
+
+    def get_macro_modifier(
+        self, *, factor_id: str, category: str, target_date: str, regime: str | None = None
+    ) -> float:
+        regime_value = regime or "default"
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT modifier FROM macro_regime_config
+                WHERE factor_id=? AND regime=?
+                  AND (effective_date IS NULL OR effective_date<=?)
+                ORDER BY effective_date DESC LIMIT 1""",
+                (factor_id, regime_value, target_date),
+            ).fetchone()
+            if not row:
+                row = connection.execute(
+                    """SELECT modifier FROM macro_regime_config
+                    WHERE factor_id IS NULL AND category=? AND regime=?
+                      AND (effective_date IS NULL OR effective_date<=?)
+                    ORDER BY effective_date DESC LIMIT 1""",
+                    (category, regime_value, target_date),
+                ).fetchone()
+        return float(row["modifier"]) if row else 1.0
+
+    # ---------- global ETF macro research ----------
+
+    def upsert_global_etf_definition(self, definition: dict[str, Any]) -> dict[str, Any]:
+        now = _now()
+        payload = dict(definition)
+        payload.setdefault("asset_type", "GLOBAL_ETF")
+        payload.setdefault("source", "")
+        payload.setdefault("metadata", {})
+        payload.setdefault("status", "ACTIVE")
+        payload.setdefault("created_at", now)
+        payload["updated_at"] = now
+        with self._connect() as connection:
+            previous = connection.execute(
+                "SELECT created_at FROM global_etf_definition WHERE asset_code=?",
+                (payload["asset_code"],),
+            ).fetchone()
+            if previous:
+                payload["created_at"] = previous["created_at"]
+            connection.execute(
+                """INSERT OR REPLACE INTO global_etf_definition
+                (asset_code,research_asset_code,trade_asset_code,name,asset_type,source,
+                 metadata,status,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    payload["asset_code"], payload["research_asset_code"], payload.get("trade_asset_code"),
+                    payload.get("name", ""), payload["asset_type"], payload["source"],
+                    _json(payload["metadata"]), payload["status"], payload["created_at"], payload["updated_at"],
+                ),
+            )
+        return payload
+
+    def list_global_etf_definitions(self, *, enabled_only: bool = False) -> list[dict[str, Any]]:
+        query = "SELECT * FROM global_etf_definition"
+        if enabled_only:
+            query += " WHERE status='ACTIVE'"
+        query += " ORDER BY asset_code"
+        with self._connect() as connection:
+            rows = connection.execute(query).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["metadata"] = _decode(item.get("metadata")) or {}
+            result.append(item)
+        return result
+
+    def upsert_global_etf_activation(self, profile: dict[str, Any]) -> dict[str, Any]:
+        now = _now()
+        payload = dict(profile)
+        payload.setdefault("profile_id", uuid.uuid4().hex)
+        payload.setdefault("horizon", "medium")
+        payload.setdefault("enabled", 0)
+        payload.setdefault("frequency", "monthly")
+        payload.setdefault("status", "ENABLED")
+        payload.setdefault("created_at", now)
+        payload["updated_at"] = now
+        with self._connect() as connection:
+            previous = connection.execute(
+                "SELECT profile_id,created_at FROM global_etf_activation_profile WHERE asset_code=? AND horizon=?",
+                (payload["asset_code"], payload["horizon"]),
+            ).fetchone()
+            if previous:
+                payload["profile_id"] = previous["profile_id"]
+                payload["created_at"] = previous["created_at"]
+            connection.execute(
+                """INSERT OR REPLACE INTO global_etf_activation_profile
+                (profile_id,asset_code,horizon,enabled,frequency,status,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?)""",
+                (
+                    payload["profile_id"], payload["asset_code"], payload["horizon"], int(payload["enabled"]),
+                    payload["frequency"], payload["status"], payload["created_at"], payload["updated_at"],
+                ),
+            )
+        return payload
+
+    def list_global_etf_activations(
+        self, *, horizon: str | None = None, enabled_only: bool = False
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        values: list[Any] = []
+        if horizon:
+            clauses.append("horizon=?")
+            values.append(horizon)
+        if enabled_only:
+            clauses.extend(["enabled=1", "status='ENABLED'"])
+        query = "SELECT * FROM global_etf_activation_profile"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY asset_code"
+        with self._connect() as connection:
+            return [dict(row) for row in connection.execute(query, values).fetchall()]
+
+    def upsert_global_etf_macro_rule(self, rule: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(rule)
+        payload.setdefault("status", "DRAFT")
+        payload.setdefault("approved_by", "manual")
+        if payload.get("status") == "APPROVED" and not payload.get("approved_at"):
+            payload["approved_at"] = _now()
+        with self._connect() as connection:
+            existing = connection.execute(
+                """SELECT rule_id FROM global_etf_macro_rule
+                WHERE asset_code=? AND macro_state=? AND effective_date IS ?""",
+                (payload["asset_code"], payload["macro_state"], payload.get("effective_date")),
+            ).fetchone()
+            if existing:
+                payload["rule_id"] = existing["rule_id"]
+                connection.execute(
+                    """UPDATE global_etf_macro_rule SET modifier=?,sample_start=?,sample_end=?,sample_count=?,
+                    confidence=?,approved_by=?,approved_at=?,effective_date=?,expiry_date=?,status=? WHERE rule_id=?""",
+                    (
+                        float(payload["modifier"]), payload.get("sample_start"), payload.get("sample_end"),
+                        payload.get("sample_count"), payload.get("confidence"), payload["approved_by"],
+                        payload.get("approved_at"), payload.get("effective_date"), payload.get("expiry_date"),
+                        payload["status"], payload["rule_id"],
+                    ),
+                )
+            else:
+                cursor = connection.execute(
+                    """INSERT INTO global_etf_macro_rule
+                    (asset_code,macro_state,modifier,sample_start,sample_end,sample_count,confidence,
+                     approved_by,approved_at,effective_date,expiry_date,status)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        payload["asset_code"], payload["macro_state"], float(payload["modifier"]),
+                        payload.get("sample_start"), payload.get("sample_end"), payload.get("sample_count"),
+                        payload.get("confidence"), payload["approved_by"], payload.get("approved_at"),
+                        payload.get("effective_date"), payload.get("expiry_date"), payload["status"],
+                    ),
+                )
+                payload["rule_id"] = cursor.lastrowid
+        return payload
+
+    def list_global_etf_macro_rules(
+        self, *, asset_code: str | None = None, status: str | None = None
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        values: list[Any] = []
+        if asset_code:
+            clauses.append("asset_code=?")
+            values.append(asset_code)
+        if status:
+            clauses.append("status=?")
+            values.append(status)
+        query = "SELECT * FROM global_etf_macro_rule"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY asset_code, macro_state, effective_date"
+        with self._connect() as connection:
+            return [dict(row) for row in connection.execute(query, values).fetchall()]
+
+    def get_global_etf_macro_rules(
+        self, *, asset_code: str, macro_states: list[str], target_date: str
+    ) -> list[dict[str, Any]]:
+        if not macro_states:
+            return []
+        placeholders = ",".join("?" for _ in macro_states)
+        values: list[Any] = [asset_code, *macro_states, target_date, target_date]
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM global_etf_macro_rule
+                WHERE asset_code=? AND macro_state IN ({placeholders}) AND status='APPROVED'
+                  AND (effective_date IS NULL OR effective_date<=?)
+                  AND (expiry_date IS NULL OR expiry_date>=?)
+                ORDER BY macro_state""",
+                values,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def save_global_etf_score_snapshot(self, payload: dict[str, Any]) -> str:
+        snapshot_id = payload.get("snapshot_id") or uuid.uuid4().hex
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO global_etf_score_snapshot
+                (snapshot_id,target_date,asset_code,payload,created_at)
+                VALUES (?,?,?,?,?)""",
+                (snapshot_id, payload["target_date"], payload["asset_code"], _json(payload), _now()),
+            )
+        return snapshot_id
+
+    # ---- 全球 ETF 研究资产 ↔ 交易资产映射 ----
+
+    _TRADE_MAPPING_STATUS_VALUES = {"ACTIVE", "INACTIVE"}
+    _FX_RULE_VALUES = {"static", "manual", "realtime", "estimate"}
+
+    def upsert_global_etf_trade_mapping(self, mapping: dict[str, Any]) -> dict[str, Any]:
+        """新增或更新研究资产↔交易资产映射。
+
+        保留 mapping_id 与 created_at（按 research_asset_code+trade_asset_code 查回）；
+        校验研究资产存在性与字段取值范围；不自动生成交易指令、不联动其他表。
+        """
+        now = _now()
+        payload = dict(mapping)
+        payload.setdefault("mapping_id", uuid.uuid4().hex)
+        payload.setdefault("trade_asset_name", "")
+        payload.setdefault("trade_market", "")
+        payload.setdefault("currency", "CNY")
+        payload.setdefault("fx_pair", "")
+        payload.setdefault("fx_rule", "static")
+        payload.setdefault("management_fee", 0.0)
+        payload.setdefault("trading_cost_bps", 0.0)
+        payload.setdefault("market_timezone", "")
+        payload.setdefault("trading_hours", "")
+        payload.setdefault("holiday_risk", "")
+        payload.setdefault("priority", 1)
+        payload.setdefault("status", "ACTIVE")
+        payload.setdefault("created_at", now)
+        payload["updated_at"] = now
+
+        research_asset = payload["research_asset_code"]
+        trade_asset = payload["trade_asset_code"]
+        if not research_asset or not trade_asset:
+            raise ValueError("研究资产代码与交易资产代码为必填项")
+        if payload["status"] not in self._TRADE_MAPPING_STATUS_VALUES:
+            raise ValueError(f"status 必须是 {sorted(self._TRADE_MAPPING_STATUS_VALUES)}，收到：{payload['status']}")
+        if not isinstance(payload["priority"], int) or payload["priority"] < 1:
+            raise ValueError("priority 必须是大于等于 1 的整数")
+        if payload["management_fee"] < 0 or payload["trading_cost_bps"] < 0:
+            raise ValueError("management_fee 与 trading_cost_bps 不能为负")
+        if payload["fx_rule"] not in self._FX_RULE_VALUES:
+            raise ValueError(f"fx_rule 必须是 {sorted(self._FX_RULE_VALUES)}，收到：{payload['fx_rule']}")
+        if payload["fx_rule"] == "static":
+            rate = payload.get("exchange_rate")
+            if rate is None or float(rate) <= 0:
+                raise ValueError("fx_rule=static 时必须提供正数 exchange_rate")
+
+        with self._connect() as connection:
+            definition = connection.execute(
+                "SELECT asset_code FROM global_etf_definition WHERE asset_code=?",
+                (research_asset,),
+            ).fetchone()
+            if definition is None:
+                raise ValueError(f"研究资产不存在：{research_asset}，请先注册 global_etf_definition")
+            previous = connection.execute(
+                """SELECT mapping_id, created_at FROM global_etf_trade_mapping
+                WHERE research_asset_code=? AND trade_asset_code=?""",
+                (research_asset, trade_asset),
+            ).fetchone()
+            if previous:
+                payload["mapping_id"] = previous["mapping_id"]
+                payload["created_at"] = previous["created_at"]
+            connection.execute(
+                """INSERT OR REPLACE INTO global_etf_trade_mapping
+                (mapping_id,research_asset_code,trade_asset_code,trade_asset_name,trade_market,
+                 currency,fx_pair,fx_rule,exchange_rate,management_fee,trading_cost_bps,
+                 tracking_error,premium_discount,market_timezone,trading_hours,holiday_risk,
+                 priority,status,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    payload["mapping_id"], payload["research_asset_code"], payload["trade_asset_code"],
+                    payload["trade_asset_name"], payload["trade_market"], payload["currency"],
+                    payload["fx_pair"], payload["fx_rule"], payload.get("exchange_rate"),
+                    float(payload["management_fee"]), float(payload["trading_cost_bps"]),
+                    payload.get("tracking_error"), payload.get("premium_discount"),
+                    payload["market_timezone"], payload["trading_hours"], payload["holiday_risk"],
+                    payload["priority"], payload["status"], payload["created_at"], payload["updated_at"],
+                ),
+            )
+        return payload
+
+    def list_global_etf_trade_mappings(
+        self,
+        *,
+        research_asset_code: str | None = None,
+        trade_asset_code: str | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """按研究资产/交易资产/状态过滤；ORDER BY research_asset_code, priority, trade_asset_code。"""
+        clauses: list[str] = []
+        values: list[Any] = []
+        if research_asset_code:
+            clauses.append("research_asset_code=?")
+            values.append(research_asset_code)
+        if trade_asset_code:
+            clauses.append("trade_asset_code=?")
+            values.append(trade_asset_code)
+        if status:
+            clauses.append("status=?")
+            values.append(status)
+        query = "SELECT * FROM global_etf_trade_mapping"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY research_asset_code, priority, trade_asset_code"
+        with self._connect() as connection:
+            return [dict(row) for row in connection.execute(query, values).fetchall()]
+
+    def get_global_etf_trade_mappings(
+        self,
+        research_asset_code: str,
+        *,
+        status: str = "ACTIVE",
+    ) -> list[dict[str, Any]]:
+        """取某研究资产的可用交易资产映射（默认仅 ACTIVE），按 priority 升序。"""
+        return self.list_global_etf_trade_mappings(
+            research_asset_code=research_asset_code,
+            status=status,
+        )
+
+    def save_factor_monitoring_snapshot(self, payload: dict[str, Any]) -> str:
+        snapshot_id = payload.get("snapshot_id") or uuid.uuid4().hex
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO factor_monitoring_snapshot
+                (snapshot_id,factor_id,as_of,long_return,short_return,long_short_return,
+                 cumulative_nav,drawdown,max_drawdown,status,payload,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    snapshot_id, payload["factor_id"], payload["as_of"], payload.get("long_return"),
+                    payload.get("short_return"), payload.get("long_short_return"), payload.get("cumulative_nav"),
+                    payload.get("drawdown"), payload.get("max_drawdown"), payload.get("status", "OK"),
+                    _json(payload), _now(),
+                ),
+            )
+        return snapshot_id
+
+    def suspend_factor(self, profile_id: str, *, reason: str, as_of: str) -> None:
+        now = _now()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT factor_id FROM factor_activation_profile WHERE profile_id=?", (profile_id,)
+            ).fetchone()
+            if not row:
+                raise KeyError(profile_id)
+            connection.execute(
+                """UPDATE factor_activation_profile
+                SET status='SUSPENDED', suspended_at=?, suspend_reason=?, updated_at=?
+                WHERE profile_id=?""",
+                (as_of, reason, now, profile_id),
+            )
+            connection.execute(
+                """INSERT INTO factor_decision
+                (decision_id,factor_id,profile_id,action,reason,payload,created_at)
+                VALUES (?,?,?,?,?,?,?)""",
+                (uuid.uuid4().hex, row["factor_id"], profile_id, "SUSPEND", reason, _json({"as_of": as_of}), now),
+            )
+
+    def restore_factor(self, profile_id: str, *, reason: str = "manual restore") -> None:
+        now = _now()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT factor_id FROM factor_activation_profile WHERE profile_id=?", (profile_id,)
+            ).fetchone()
+            if not row:
+                raise KeyError(profile_id)
+            connection.execute(
+                """UPDATE factor_activation_profile
+                SET status='ENABLED', suspended_at=NULL, suspend_reason=NULL, updated_at=?
+                WHERE profile_id=?""",
+                (now, profile_id),
+            )
+            connection.execute(
+                """INSERT INTO factor_decision
+                (decision_id,factor_id,profile_id,action,reason,payload,created_at)
+                VALUES (?,?,?,?,?,?,?)""",
+                (uuid.uuid4().hex, row["factor_id"], profile_id, "RESTORE", reason, "{}", now),
+            )
 
     def upsert_portfolio_asset_context(self, context: PortfolioAssetContext) -> PortfolioAssetContext:
         self._assert_project_writable(context.project_id)
@@ -1224,6 +2069,265 @@ class ResearchStore:
             item["status"] = "EXPIRED" if expires_at and datetime.fromisoformat(expires_at) < now else item["status"]
             output.append(item)
         return output
+
+    # ---------- managed local data ----------
+
+    def create_data_update_job(
+        self,
+        *,
+        mode: str,
+        datasets: list[str],
+        codes: list[str],
+        update_policy: str = "incremental",
+    ) -> str:
+        job_id = uuid.uuid4().hex
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO data_update_job
+                (job_id,mode,datasets,codes,update_policy,status,started_at)
+                VALUES (?,?,?,?,?,'RUNNING',?)""",
+                (job_id, mode, _json(datasets), _json(codes), update_policy, _now()),
+            )
+        return job_id
+
+    def finish_data_update_job(
+        self,
+        job_id: str,
+        *,
+        status: str,
+        rows_added: int = 0,
+        rows_updated: int = 0,
+        error: str | None = None,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """UPDATE data_update_job
+                SET status=?,rows_added=?,rows_updated=?,finished_at=?,error=?
+                WHERE job_id=?""",
+                (status, rows_added, rows_updated, _now(), error, job_id),
+            )
+
+    def save_data_update_attempt(self, attempt: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(attempt)
+        payload.setdefault("attempt_id", uuid.uuid4().hex)
+        payload.setdefault("success", 0)
+        payload.setdefault("request", {})
+        payload.setdefault("message", "")
+        payload.setdefault("rows_returned", 0)
+        payload.setdefault("created_at", _now())
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO data_update_attempt
+                (attempt_id,job_id,source,dataset,code,success,request,message,as_of,rows_returned,latency_ms,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    payload["attempt_id"], payload["job_id"], payload["source"], payload["dataset"],
+                    payload.get("code"), int(payload.get("success", 0)), _json(payload.get("request") or {}),
+                    payload.get("message", ""), payload.get("as_of"), int(payload.get("rows_returned", 0)),
+                    payload.get("latency_ms"), payload["created_at"],
+                ),
+            )
+        return payload
+
+    def upsert_market_daily(
+        self,
+        frame: pd.DataFrame,
+        *,
+        code: str,
+        asset_type: str,
+        source: str,
+        snapshot_id: str | None = None,
+        available_at: str | None = None,
+    ) -> dict[str, int]:
+        if frame.empty or "trade_date" not in frame.columns or "close" not in frame.columns:
+            return {"added": 0, "updated": 0}
+        columns = ["open", "high", "low", "close", "pre_close", "vol", "amount"]
+        data = frame.copy()
+        data["trade_date"] = pd.to_datetime(data["trade_date"], errors="coerce")
+        data = data.dropna(subset=["trade_date", "close"]).sort_values("trade_date")
+        added = updated = 0
+        with self._connect() as connection:
+            for record in data.to_dict("records"):
+                trade_date = pd.Timestamp(record["trade_date"]).date().isoformat()
+                values = {column: record.get(column) for column in columns}
+                values = {
+                    key: (None if value is None or pd.isna(value) else float(value))
+                    for key, value in values.items()
+                }
+                content_hash = hashlib.sha256(
+                    _json({"code": code, "trade_date": trade_date, "source": source, **values}).encode("utf-8")
+                ).hexdigest()
+                row_id = hashlib.sha256(
+                    f"{code}|{trade_date}|{source}|{content_hash}".encode("utf-8")
+                ).hexdigest()
+                existing = connection.execute(
+                    "SELECT row_id FROM data_market_daily WHERE row_id=?", (row_id,)
+                ).fetchone()
+                if existing:
+                    continue
+                connection.execute(
+                    "UPDATE data_market_daily SET is_latest=0 WHERE code=? AND trade_date=? AND source=?",
+                    (code, trade_date, source),
+                )
+                connection.execute(
+                    """INSERT INTO data_market_daily
+                    (row_id,code,asset_type,trade_date,open,high,low,close,pre_close,volume,amount,
+                     source,snapshot_id,available_at,revision_id,content_hash,is_latest,created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        row_id, code, asset_type, trade_date, values["open"], values["high"], values["low"],
+                        values["close"], values["pre_close"], values["vol"], values["amount"], source,
+                        snapshot_id, available_at or trade_date, content_hash, content_hash, 1, _now(),
+                    ),
+                )
+                added += 1
+                if connection.execute(
+                    "SELECT COUNT(*) FROM data_market_daily WHERE code=? AND trade_date=? AND source=? AND row_id<>?",
+                    (code, trade_date, source, row_id),
+                ).fetchone()[0]:
+                    updated += 1
+        return {"added": added, "updated": updated}
+
+    def upsert_asset_metadata(
+        self,
+        metadata: dict[str, Any],
+        *,
+        code: str,
+        asset_type: str,
+        source: str,
+        as_of: str | None = None,
+        available_at: str | None = None,
+        snapshot_id: str | None = None,
+    ) -> int:
+        count = 0
+        with self._connect() as connection:
+            for field_name, value in metadata.items():
+                if field_name in {"ts_code", "code"}:
+                    continue
+                serialized = _json(value) if isinstance(value, (dict, list, tuple)) else str(value) if value is not None else None
+                revision_id = hashlib.sha256(
+                    _json({"code": code, "field": field_name, "value": serialized, "source": source}).encode("utf-8")
+                ).hexdigest()
+                row_id = hashlib.sha256(
+                    f"{code}|{field_name}|{source}|{revision_id}".encode("utf-8")
+                ).hexdigest()
+                if connection.execute("SELECT 1 FROM data_asset_metadata WHERE row_id=?", (row_id,)).fetchone():
+                    continue
+                connection.execute(
+                    "UPDATE data_asset_metadata SET is_latest=0 WHERE code=? AND field_name=? AND source=?",
+                    (code, field_name, source),
+                )
+                connection.execute(
+                    """INSERT INTO data_asset_metadata
+                    (row_id,code,asset_type,field_name,field_value,source,as_of,available_at,revision_id,snapshot_id,is_latest,created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,1,?)""",
+                    (row_id, code, asset_type, field_name, serialized, source, as_of, available_at or as_of, revision_id, snapshot_id, _now()),
+                )
+                count += 1
+        return count
+
+    def latest_market_date(self, code: str, *, source: str | None = None) -> str | None:
+        clauses = ["code=?", "is_latest=1"]
+        values: list[Any] = [code]
+        if source:
+            clauses.append("source=?")
+            values.append(source)
+        with self._connect() as connection:
+            row = connection.execute(
+                f"SELECT MAX(trade_date) AS as_of FROM data_market_daily WHERE {' AND '.join(clauses)}", values
+            ).fetchone()
+        return row["as_of"] if row and row["as_of"] else None
+
+    def query_asset_metadata(self, *, code: str, limit: int = 500) -> pd.DataFrame:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT code,asset_type,field_name,field_value,source,as_of,available_at
+                FROM data_asset_metadata WHERE code=? AND is_latest=1
+                ORDER BY field_name LIMIT ?""",
+                (code, limit),
+            ).fetchall()
+        return pd.DataFrame([dict(row) for row in rows])
+
+    def query_market_daily(
+        self,
+        *,
+        code: str | None = None,
+        asset_type: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
+        as_of_date: str | None = None,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> pd.DataFrame:
+        clauses = ["is_latest=1"]
+        values: list[Any] = []
+        for field, value in (("code", code), ("asset_type", asset_type)):
+            if value:
+                clauses.append(f"{field}=?")
+                values.append(value.upper() if field == "asset_type" else value)
+        if start:
+            clauses.append("trade_date>=?")
+            values.append(start)
+        if end:
+            clauses.append("trade_date<=?")
+            values.append(end)
+        if as_of_date:
+            clauses.append("(available_at IS NULL OR available_at<=?)")
+            values.append(as_of_date)
+        query = f"""SELECT code,asset_type,trade_date,open,high,low,close,pre_close,volume,amount,source,available_at
+                    FROM data_market_daily WHERE {' AND '.join(clauses)}
+                    ORDER BY trade_date,code LIMIT ? OFFSET ?"""
+        values.extend([limit, offset])
+        with self._connect() as connection:
+            rows = connection.execute(query, values).fetchall()
+        return pd.DataFrame([dict(row) for row in rows])
+
+    def list_data_catalog(self, *, dataset: str | None = None, code: str | None = None) -> list[dict[str, Any]]:
+        output: list[dict[str, Any]] = []
+        if dataset in {None, "market"}:
+            clauses = ["is_latest=1"]
+            values: list[Any] = []
+            if code:
+                clauses.append("code=?")
+                values.append(code)
+            with self._connect() as connection:
+                rows = connection.execute(
+                    f"""SELECT code,asset_type,source,MIN(trade_date) AS start_date,
+                    MAX(trade_date) AS end_date,COUNT(*) AS row_count,MAX(created_at) AS updated_at
+                    FROM data_market_daily WHERE {' AND '.join(clauses)}
+                    GROUP BY code,asset_type,source ORDER BY code""", values,
+                ).fetchall()
+            output.extend({"dataset": "market", **dict(row)} for row in rows)
+        if dataset in {None, "factor"}:
+            clauses = []
+            values = []
+            if code:
+                clauses.append("factor_id=?")
+                values.append(code)
+            with self._connect() as connection:
+                rows = connection.execute(
+                    f"SELECT * FROM data_factor_snapshot{' WHERE ' + ' AND '.join(clauses) if clauses else ''} ORDER BY created_at DESC",
+                    values,
+                ).fetchall()
+            output.extend({"dataset": "factor", **dict(row)} for row in rows)
+        return output
+
+    def save_factor_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(snapshot)
+        payload.setdefault("snapshot_id", uuid.uuid4().hex)
+        payload.setdefault("created_at", _now())
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO data_factor_snapshot
+                (snapshot_id,factor_id,asset_type,horizon,as_of,file_path,manifest_path,row_count,content_hash,formula_hash,value_semantics,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    payload["snapshot_id"], payload["factor_id"], payload["asset_type"], payload["horizon"],
+                    payload.get("as_of"), payload["file_path"], payload["manifest_path"], int(payload.get("row_count", 0)),
+                    payload.get("content_hash"), payload.get("formula_hash"), payload.get("value_semantics"), payload["created_at"],
+                ),
+            )
+        return payload
 
     @staticmethod
     def write_json(path: Path, payload: Any) -> None:
