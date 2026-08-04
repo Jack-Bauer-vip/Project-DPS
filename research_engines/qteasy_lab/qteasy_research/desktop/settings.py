@@ -16,11 +16,11 @@ def default_settings_path() -> Path:
 def load_settings(path: str | Path | None = None) -> dict[str, Any]:
     target = Path(path) if path else default_settings_path()
     if not target.exists():
-        return {"store_dir": "", "default_horizon": "medium", "default_update_policy": "reuse", "data_mode": "direct", "evidence_research": True, "indicator_config": {}}
+        return {"store_dir": "", "default_horizon": "medium", "default_update_policy": "reuse", "data_mode": "direct", "data_manager_mode": "direct", "evidence_research": True, "indicator_config": {}}
     try:
         return json.loads(target.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"store_dir": "", "default_horizon": "medium", "default_update_policy": "reuse", "data_mode": "direct", "evidence_research": True, "indicator_config": {}}
+        return {"store_dir": "", "default_horizon": "medium", "default_update_policy": "reuse", "data_mode": "direct", "data_manager_mode": "direct", "evidence_research": True, "indicator_config": {}}
 
 
 def save_settings(values: dict[str, Any], path: str | Path | None = None) -> Path:

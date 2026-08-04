@@ -20,6 +20,7 @@ from qteasy_research.pretrade.providers import (
     CompositeProvider,
     LocalCsvProvider,
     ResearchSnapshotProvider,
+    SqliteProvider,
     TushareProvider,
 )
 from qteasy_research.pretrade.reporting import render_charts, render_markdown
@@ -137,13 +138,18 @@ def _add_stage(result: ResearchRunResult, store: ResearchStore, name: str, statu
         callback(stage)
 
 
-def _provider_chain(data_mode: str, local: LocalCsvProvider, snapshot: ResearchSnapshotProvider) -> CompositeProvider:
+def _provider_chain(
+    data_mode: str,
+    local: LocalCsvProvider,
+    snapshot: ResearchSnapshotProvider,
+    database: SqliteProvider,
+) -> CompositeProvider:
     if data_mode == "local":
-        providers = [local, snapshot]
+        providers = [database, local, snapshot]
     elif data_mode == "hybrid":
-        providers = [local, snapshot, AkshareProvider(), TushareProvider()]
+        providers = [database, local, snapshot, AkshareProvider(), TushareProvider()]
     else:
-        providers = [AkshareProvider(), TushareProvider(), local, snapshot]
+        providers = [AkshareProvider(), TushareProvider(), database, local, snapshot]
     return CompositeProvider(providers)
 
 
@@ -200,6 +206,7 @@ def run_instrument_research(
     local = LocalCsvProvider()
     store = ResearchStore(output_dir or _default_root())
     snapshot = ResearchSnapshotProvider(store.root)
+    database = SqliteProvider(store.root)
     project = store.get_project(project_id) if project_id else None
     if project:
         if normalize_code(code)[0] != normalize_code(project.code)[0]:
@@ -209,7 +216,7 @@ def run_instrument_research(
         if project.status != ResearchProjectStatus.ACTIVE.value:
             store.set_project_status(project_id, ResearchProjectStatus.ACTIVE.value)
     cache_key = _cache_key(config, local.data_dir)
-    provider = _provider_chain(data_mode, local, snapshot)
+    provider = _provider_chain(data_mode, local, snapshot, database)
     preflight_price = None
     if update_policy in {"reuse", "check_update"} and not force_refresh:
         cached = store.find_cached(cache_key, project_id=project_id)

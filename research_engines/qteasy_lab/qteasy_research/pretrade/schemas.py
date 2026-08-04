@@ -350,3 +350,26 @@ class FactorMatchResult:
     missing_items: list[str] = field(default_factory=list)
     decay_warnings: list[str] = field(default_factory=list)
     details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class FactorScoreResult:
+    """Production factor score snapshot produced from SQLite + Parquet."""
+
+    target_date: str
+    asset_type: str
+    horizon: str
+    scores: list[dict[str, Any]] = field(default_factory=list)
+    factor_details: dict[str, Any] = field(default_factory=dict)
+    effective_weights: dict[str, float] = field(default_factory=dict)
+    normalized_weights: dict[str, dict[str, float]] = field(default_factory=dict)
+    macro_modifiers: dict[str, float] = field(default_factory=dict)
+    crowding: dict[str, Any] = field(default_factory=dict)
+    coverage: dict[str, Any] = field(default_factory=dict)
+    diagnostics: list[dict[str, Any]] = field(default_factory=list)
+    asset_diagnostics: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    csv_path: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)

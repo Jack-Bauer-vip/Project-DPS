@@ -276,6 +276,67 @@ class ResearchSnapshotProvider:
         )
 
 
+class SqliteProvider:
+    """Read normalized data written by DataManager from research.sqlite3."""
+
+    name = "sqlite_db"
+
+    def __init__(self, root: str | Path) -> None:
+        self.root = Path(root)
+
+    def get_price_history(self, identity: AssetIdentity) -> ProviderData:
+        from qteasy_research.pretrade.storage import ResearchStore
+
+        frame = ResearchStore(self.root).query_market_daily(
+            code=identity.code, asset_type=identity.asset_type, limit=10_000_000
+        )
+        if frame.empty:
+            return ProviderData(source=self.name, message=f"SQLite 中没有 {identity.code} 行情")
+        frame = frame.rename(columns={"volume": "vol"})
+        frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce")
+        return ProviderData(
+            data=frame,
+            source=self.name,
+            as_of=frame["trade_date"].max().date().isoformat(),
+            message="读取 SQLite 标准化行情",
+            request={"code": identity.code, "data_type": "market"},
+            fields_returned=list(frame.columns),
+        )
+
+    def get_benchmark_history(self, code: str) -> ProviderData:
+        from qteasy_research.pretrade.storage import ResearchStore
+
+        frame = ResearchStore(self.root).query_market_daily(code=code, limit=10_000_000)
+        if frame.empty:
+            return ProviderData(source=self.name, message=f"SQLite 中没有基准 {code} 行情")
+        frame = frame.rename(columns={"volume": "vol"})
+        frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce")
+        return ProviderData(
+            data=frame,
+            source=self.name,
+            as_of=frame["trade_date"].max().date().isoformat(),
+            message="读取 SQLite 标准化基准行情",
+            request={"code": code, "data_type": "market"},
+            fields_returned=list(frame.columns),
+        )
+
+    def get_metadata(self, identity: AssetIdentity) -> ProviderData:
+        from qteasy_research.pretrade.storage import ResearchStore
+
+        frame = ResearchStore(self.root).query_asset_metadata(code=identity.code)
+        if frame.empty:
+            return ProviderData(source=self.name, message=f"SQLite 中没有 {identity.code} 基础资料")
+        metadata = {str(row["field_name"]): row["field_value"] for _, row in frame.iterrows()}
+        return ProviderData(
+            data=pd.DataFrame([metadata]),
+            source=self.name,
+            as_of=str(frame["as_of"].dropna().max()) if frame["as_of"].notna().any() else None,
+            message="读取 SQLite 标准化基础资料",
+            request={"code": identity.code, "data_type": "metadata"},
+            fields_returned=list(metadata),
+        )
+
+
 class TushareProvider:
     name = "tushare"
 

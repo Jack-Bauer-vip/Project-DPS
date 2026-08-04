@@ -13,6 +13,7 @@ from typing import Any
 import pandas as pd
 
 from qteasy_research.pretrade.factor_matching import match_asset_to_factors
+from qteasy_research.pretrade.factor_scoring import calculate_factor_scores, monitor_factor_long_short
 from qteasy_research.pretrade.factor_research import (
     FACTOR_RESEARCH_FORMULA_VERSION,
     diagnose_factor_collinearity,
@@ -27,6 +28,36 @@ from qteasy_research.pretrade.schemas import (
     FactorResearchResult,
     TransactionCostConfig,
 )
+
+
+def import_factor_research_result(
+    factor_id: str,
+    research_summary: dict[str, Any],
+    *,
+    store_root: str | Path,
+    approve: bool = False,
+) -> dict[str, Any]:
+    """Import an offline factor study summary and optionally approve it.
+
+    The production scorer continues to use the configured Parquet values. This
+    function only updates the definition's auditable research summary and
+    lifecycle status.
+    """
+
+    if not isinstance(research_summary, dict):
+        raise TypeError("research_summary 必须是 JSON 对象")
+    from qteasy_research.pretrade.storage import ResearchStore
+
+    store = ResearchStore(store_root)
+    definition = next(
+        (item for item in store.list_factor_definitions() if item["factor_id"] == factor_id),
+        None,
+    )
+    if definition is None:
+        raise ValueError(f"未找到因子定义：{factor_id}")
+    definition["research_summary"] = dict(research_summary)
+    definition["status"] = "APPROVED" if approve else "CANDIDATE"
+    return store.upsert_factor_definition(definition)
 
 
 def research_factor(
@@ -139,4 +170,5 @@ def match_factors(
 __all__ = [
     "research_factor", "estimate_exposure", "match_factors",
     "analyze_factor_collinearity", "analyze_factor_decay", "grade_data_quality",
+    "calculate_factor_scores", "monitor_factor_long_short", "import_factor_research_result",
 ]

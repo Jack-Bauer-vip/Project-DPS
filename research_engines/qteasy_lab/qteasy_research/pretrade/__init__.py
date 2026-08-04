@@ -27,11 +27,22 @@ from qteasy_research.pretrade.schemas import (
     FactorResearchResult,
     AssetFactorExposure,
     FactorMatchResult,
+    FactorScoreResult,
 )
 from qteasy_research.pretrade.providers import (
     AssetDataSnapshot,
     CleanDataProvider,
     ProviderData,
+    SqliteProvider,
+)
+from qteasy_research.pretrade.data_manager import (
+    DataManager,
+    DataQueryResult,
+    DataSourceHealth,
+    DataSyncRequest,
+    DataSyncResult,
+    FactorBuildResult,
+    HttpMiddlewareProvider,
 )
 from qteasy_research.pretrade.factor_data import (
     FactorDataProvider,
@@ -108,6 +119,16 @@ from qteasy_research.pretrade.export import (
     export_report_bundle,
     export_research_report,
 )
+from qteasy_research.pretrade.factor_scoring import (
+    calculate_factor_scores,
+    formula_md5,
+    monitor_factor_long_short,
+)
+from qteasy_research.pretrade.factor_ui import (
+    DEFAULT_FACTOR_DEFINITIONS,
+    get_factor_data_status,
+    initialize_default_factor_definitions,
+)
 from qteasy_research.strategy_import import (
     StrategyAnalysis,
     analyze_strategy_file,
@@ -139,9 +160,18 @@ __all__ = [
     "FactorResearchResult",
     "AssetFactorExposure",
     "FactorMatchResult",
+    "FactorScoreResult",
     "AssetDataSnapshot",
     "CleanDataProvider",
     "ProviderData",
+    "SqliteProvider",
+    "DataManager",
+    "DataQueryResult",
+    "DataSourceHealth",
+    "DataSyncRequest",
+    "DataSyncResult",
+    "FactorBuildResult",
+    "HttpMiddlewareProvider",
     "FactorDataProvider",
     "FactorDataResponse",
     "FactorObservation",
@@ -212,6 +242,12 @@ __all__ = [
     "export_research_report",
     "export_project_report",
     "export_report_bundle",
+    "calculate_factor_scores",
+    "formula_md5",
+    "monitor_factor_long_short",
+    "DEFAULT_FACTOR_DEFINITIONS",
+    "get_factor_data_status",
+    "initialize_default_factor_definitions",
     "StrategyAnalysis",
     "analyze_strategy_file",
     "generate_strategy_candidate",
@@ -224,7 +260,7 @@ def __getattr__(name: str):
     """延迟加载实验室 API，避免 ``qteasy_research.factor_lab`` 的循环导入。"""
 
     if name in {
-        "research_factor", "estimate_exposure", "match_factors",
+        "research_factor", "estimate_exposure", "match_factors", "import_factor_research_result",
         "analyze_factor_collinearity", "analyze_factor_decay",
     }:
         from qteasy_research import factor_lab
