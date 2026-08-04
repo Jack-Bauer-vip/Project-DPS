@@ -129,5 +129,72 @@ class DesktopGlobalEtfPageTests(unittest.TestCase):
         self.assertTrue(page.recalculate_button.isEnabled())
 
 
+class DesktopGlobalEtfMappingUiTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="qteasy_map_ui_", dir="D:/Project DPS"))
+        _make_fixture(self.root)
+        self.page = GlobalEtfPage(self.root / "store", data_root=self.root / "data")
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _fill_form(self, trade_code: str, **kwargs) -> None:
+        self.page.mapping_trade_code.setText(trade_code)
+        for attr, value in kwargs.items():
+            getattr(self.page, attr).setText(value)
+
+    def test_save_mapping_adds_row(self) -> None:
+        self.assertEqual(self.page.mapping_table.rowCount(), 0)
+        self.page.mapping_trade_code.setText("513500.SH")
+        self.page.mapping_trade_name.setText("标普500 QDII")
+        self.page.mapping_exchange_rate.setValue(7.2)
+        self.page.mapping_management_fee.setValue(0.6)
+        self.page.save_mapping()
+        self.assertEqual(self.page.mapping_table.rowCount(), 1)
+        self.assertIn("已保存", self.page.page_status.text())
+        store = ResearchStore(self.root / "store")
+        rows = store.get_global_etf_trade_mappings("SPY")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["trade_asset_code"], "513500.SH")
+        self.assertEqual(rows[0]["exchange_rate"], 7.2)
+
+    def test_save_mapping_missing_code_rejected(self) -> None:
+        self.page.mapping_trade_code.setText("")
+        self.page.save_mapping()
+        self.assertIn("请填写交易资产代码", self.page.page_status.text())
+        self.assertEqual(self.page.mapping_table.rowCount(), 0)
+
+    def test_deactivate_selected_mapping(self) -> None:
+        self.page.mapping_trade_code.setText("513500.SH")
+        self.page.save_mapping()
+        self.page.mapping_table.selectRow(0)
+        self.page.deactivate_mapping()
+        store = ResearchStore(self.root / "store")
+        rows = store.get_global_etf_trade_mappings("SPY", status=None)
+        self.assertEqual(rows[0]["status"], "INACTIVE")
+        self.assertIn("停用", self.page.page_status.text())
+
+    def test_delete_selected_mapping(self) -> None:
+        self.page.mapping_trade_code.setText("513500.SH")
+        self.page.save_mapping()
+        self.page.mapping_table.selectRow(0)
+        self.page.delete_mapping()
+        store = ResearchStore(self.root / "store")
+        self.assertEqual(store.get_global_etf_trade_mappings("SPY", status=None), [])
+        self.assertIn("删除", self.page.page_status.text())
+
+    def test_effective_mapping_tip_updates(self) -> None:
+        self.page.mapping_trade_code.setText("513500.SH")
+        self.page.mapping_priority.setValue(1)
+        self.page.save_mapping()
+        tip = self.page.mapping_table.toolTip()
+        self.assertIn("513500.SH", tip)
+        self.assertIn("生效", tip)
+
+
 if __name__ == "__main__":
     unittest.main()

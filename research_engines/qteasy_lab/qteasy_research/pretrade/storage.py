@@ -1440,6 +1440,14 @@ class ResearchStore:
             status=status,
         )
 
+    def delete_global_etf_trade_mapping(self, mapping_id: str) -> None:
+        """删除一条交易资产映射（映射是当前配置，无软删；INACTIVE 已表达停用）。"""
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM global_etf_trade_mapping WHERE mapping_id=?",
+                (mapping_id,),
+            )
+
     def save_factor_monitoring_snapshot(self, payload: dict[str, Any]) -> str:
         snapshot_id = payload.get("snapshot_id") or uuid.uuid4().hex
         with self._connect() as connection:

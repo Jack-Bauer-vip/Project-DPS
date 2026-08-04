@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
+    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -22,6 +24,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSplitter,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QTextBrowser,
@@ -33,6 +36,7 @@ from qteasy_research.core.global_etf_engine import (
     GlobalEtfEngine,
     initialize_default_global_etf_profiles,
 )
+from qteasy_research.core.global_etf_trade_mapping import effective_trade_mapping
 from qteasy_research.pretrade.storage import ResearchStore
 
 # 评分表格列中文翻译
@@ -77,6 +81,27 @@ RULE_COLUMN_LABELS = {
     "sample_end": "样本止",
     "effective_date": "生效日",
     "approved_at": "批准时间",
+}
+
+# 交易资产映射表列中文翻译
+MAPPING_COLUMN_LABELS = {
+    "research_asset_code": "研究资产",
+    "trade_asset_code": "交易资产",
+    "trade_asset_name": "名称",
+    "trade_market": "市场",
+    "currency": "币种",
+    "fx_pair": "汇率对",
+    "fx_rule": "汇率方式",
+    "exchange_rate": "汇率",
+    "management_fee": "管理费%",
+    "trading_cost_bps": "成本bps",
+    "tracking_error": "跟踪误差%",
+    "premium_discount": "折溢价%",
+    "market_timezone": "时区",
+    "trading_hours": "交易时段",
+    "holiday_risk": "休市风险",
+    "priority": "优先级",
+    "status": "状态",
 }
 
 GLOBAL_ETF_ASSETS = ("SPY", "TLT", "GLD")
@@ -192,6 +217,9 @@ class GlobalEtfPage(QWidget):
         # 条件收益表
         root_layout.addWidget(self._build_condition_section(), 3)
 
+        # 交易资产映射配置区
+        root_layout.addWidget(self._build_mapping_section(), 3)
+
     # ---- 分区构建 ----
 
     def _build_status_macro_section(self) -> QWidget:
@@ -223,6 +251,82 @@ class GlobalEtfPage(QWidget):
         self.condition_table = QTableWidget()
         self._configure_table(self.condition_table)
         layout.addWidget(self.condition_table)
+        return box
+
+    def _build_mapping_section(self) -> QWidget:
+        box = QGroupBox("交易资产映射（研究资产 → 可交易标的）")
+        layout = QVBoxLayout(box)
+
+        # 顶部：研究资产选择 + 操作按钮
+        top = QHBoxLayout()
+        top.addWidget(QLabel("研究资产"))
+        self.mapping_asset_combo = QComboBox()
+        self.mapping_asset_combo.addItems(list(GLOBAL_ETF_ASSETS))
+        self.mapping_asset_combo.currentTextChanged.connect(lambda _: self._refresh_mapping_table())
+        top.addWidget(self.mapping_asset_combo)
+        top.addStretch(1)
+        self.mapping_refresh_button = QPushButton("刷新")
+        self.mapping_refresh_button.clicked.connect(self._refresh_mapping_table)
+        top.addWidget(self.mapping_refresh_button)
+        layout.addLayout(top)
+
+        # 映射表格
+        self.mapping_table = QTableWidget()
+        self._configure_table(self.mapping_table)
+        self.mapping_table.itemSelectionChanged.connect(self._on_mapping_selection_changed)
+        layout.addWidget(self.mapping_table)
+
+        # 底部：新增/编辑表单
+        form = QFormLayout()
+        self.mapping_trade_code = QLineEdit()
+        self.mapping_trade_code.setPlaceholderText("如 513500.SH / 007300.OF / 518880.SH")
+        form.addRow("交易资产代码", self.mapping_trade_code)
+        self.mapping_trade_name = QLineEdit()
+        form.addRow("交易资产名称", self.mapping_trade_name)
+        self.mapping_currency = QComboBox()
+        self.mapping_currency.addItems(["CNY", "USD"])
+        form.addRow("交易币种", self.mapping_currency)
+        self.mapping_fx_rule = QComboBox()
+        self.mapping_fx_rule.addItems(["static", "manual", "realtime", "estimate"])
+        form.addRow("汇率方式", self.mapping_fx_rule)
+        self.mapping_exchange_rate = QDoubleSpinBox()
+        self.mapping_exchange_rate.setRange(0.0, 100.0)
+        self.mapping_exchange_rate.setDecimals(4)
+        self.mapping_exchange_rate.setValue(1.0)
+        form.addRow("汇率", self.mapping_exchange_rate)
+        self.mapping_management_fee = QDoubleSpinBox()
+        self.mapping_management_fee.setRange(0.0, 10.0)
+        self.mapping_management_fee.setDecimals(2)
+        form.addRow("管理费%", self.mapping_management_fee)
+        self.mapping_trading_cost = QDoubleSpinBox()
+        self.mapping_trading_cost.setRange(0.0, 1000.0)
+        self.mapping_trading_cost.setDecimals(1)
+        form.addRow("交易成本(bps)", self.mapping_trading_cost)
+        self.mapping_tracking_error = QDoubleSpinBox()
+        self.mapping_tracking_error.setRange(0.0, 50.0)
+        self.mapping_tracking_error.setDecimals(2)
+        form.addRow("跟踪误差%", self.mapping_tracking_error)
+        self.mapping_premium_discount = QDoubleSpinBox()
+        self.mapping_premium_discount.setRange(-50.0, 50.0)
+        self.mapping_premium_discount.setDecimals(2)
+        form.addRow("折溢价%", self.mapping_premium_discount)
+        self.mapping_priority = QSpinBox()
+        self.mapping_priority.setRange(1, 99)
+        self.mapping_priority.setValue(1)
+        form.addRow("优先级(小优先)", self.mapping_priority)
+        form_row = QHBoxLayout()
+        self.mapping_save_button = QPushButton("保存映射")
+        self.mapping_save_button.clicked.connect(self.save_mapping)
+        self.mapping_deactivate_button = QPushButton("停用选中")
+        self.mapping_deactivate_button.clicked.connect(self.deactivate_mapping)
+        self.mapping_delete_button = QPushButton("删除选中")
+        self.mapping_delete_button.clicked.connect(self.delete_mapping)
+        form_row.addWidget(self.mapping_save_button)
+        form_row.addWidget(self.mapping_deactivate_button)
+        form_row.addWidget(self.mapping_delete_button)
+        form_row.addStretch(1)
+        form.addRow(form_row)
+        layout.addLayout(form)
         return box
 
     @staticmethod
@@ -260,10 +364,11 @@ class GlobalEtfPage(QWidget):
     # ---- 数据加载与展示 ----
 
     def refresh(self) -> None:
-        """刷新数据状态、宏观状态、条件收益与规则状态（不触发引擎重算）。"""
+        """刷新数据状态、宏观状态、条件收益、规则状态与映射（不触发引擎重算）。"""
         self._refresh_status_macro()
         self._refresh_condition_table()
         self._refresh_rules_table()
+        self._refresh_mapping_table()
         self.status_message.emit("全球 ETF 页面已刷新")
 
     def _refresh_status_macro(self) -> None:
@@ -335,6 +440,116 @@ class GlobalEtfPage(QWidget):
         except Exception:
             rules = []
         self._fill_table(self.rules_table, rules, RULE_COLUMN_LABELS)
+
+    # ---- 交易资产映射 ----
+
+    def _refresh_mapping_table(self) -> None:
+        research_asset = self.mapping_asset_combo.currentText()
+        try:
+            mappings = self._store().get_global_etf_trade_mappings(research_asset, status=None)
+        except Exception:
+            mappings = []
+        self._fill_table(self.mapping_table, mappings, MAPPING_COLUMN_LABELS)
+        # 更新选中映射的有效性提示
+        effective = effective_trade_mapping(self._store(), research_asset)
+        tip = f"当前生效：{effective['trade_asset_code']}" if effective else "未配置生效映射"
+        self.mapping_table.setToolTip(tip)
+
+    def _on_mapping_selection_changed(self) -> None:
+        selected = self.mapping_table.currentRow()
+        if selected < 0:
+            return
+        item = self.mapping_table.item(selected, 1)  # trade_asset_code 列
+        if item is None:
+            return
+        mappings = self.mapping_table
+        # 从表格回填表单：通过当前选中的行数据（这里简单回填交易资产代码）
+        self.mapping_trade_code.setText(item.text())
+
+    def _mapping_payload_from_form(self, research_asset: str) -> dict[str, Any]:
+        """从表单收集映射字段。exchange_rate 在 fx_rule=static 时必填。"""
+        payload: dict[str, Any] = {
+            "research_asset_code": research_asset,
+            "trade_asset_code": self.mapping_trade_code.text().strip(),
+            "trade_asset_name": self.mapping_trade_name.text().strip(),
+            "currency": self.mapping_currency.currentText(),
+            "fx_rule": self.mapping_fx_rule.currentText(),
+            "exchange_rate": self.mapping_exchange_rate.value(),
+            "management_fee": self.mapping_management_fee.value(),
+            "trading_cost_bps": self.mapping_trading_cost.value(),
+            "tracking_error": self.mapping_tracking_error.value(),
+            "premium_discount": self.mapping_premium_discount.value(),
+            "priority": self.mapping_priority.value(),
+            "status": "ACTIVE",
+        }
+        return payload
+
+    def save_mapping(self) -> None:
+        research_asset = self.mapping_asset_combo.currentText()
+        payload = self._mapping_payload_from_form(research_asset)
+        if not payload["trade_asset_code"]:
+            self.page_status.setText("请填写交易资产代码")
+            return
+        try:
+            saved = self._store().upsert_global_etf_trade_mapping(payload)
+            self._refresh_mapping_table()
+            self.page_status.setText(f"已保存映射：{saved['trade_asset_code']}")
+            self.status_message.emit(f"已保存交易资产映射 {research_asset} → {saved['trade_asset_code']}")
+        except ValueError as exc:
+            self.page_status.setText(f"保存失败：{exc}")
+
+    def deactivate_mapping(self) -> None:
+        self._set_mapping_status("INACTIVE")
+
+    def delete_mapping(self) -> None:
+        research_asset = self.mapping_asset_combo.currentText()
+        row = self.mapping_table.currentRow()
+        if row < 0:
+            self.page_status.setText("请先选中要删除的映射行")
+            return
+        trade_code = self.mapping_trade_code.text().strip() or self._mapping_trade_at(row)
+        if not trade_code:
+            self.page_status.setText("无法识别选中的映射")
+            return
+        try:
+            store = self._store()
+            for mapping in store.list_global_etf_trade_mappings(research_asset_code=research_asset, trade_asset_code=trade_code):
+                # 无软删，直接删行（mapping 是当前配置，INACTIVE 已表达停用）
+                store.delete_global_etf_trade_mapping(mapping["mapping_id"])
+            self._refresh_mapping_table()
+            self.page_status.setText(f"已删除映射 {research_asset} → {trade_code}")
+        except Exception as exc:
+            self.page_status.setText(f"删除失败：{exc}")
+
+    def _set_mapping_status(self, status: str) -> None:
+        research_asset = self.mapping_asset_combo.currentText()
+        row = self.mapping_table.currentRow()
+        if row < 0:
+            self.page_status.setText("请先选中要操作的映射行")
+            return
+        trade_code = self.mapping_trade_code.text().strip() or self._mapping_trade_at(row)
+        if not trade_code:
+            self.page_status.setText("无法识别选中的映射")
+            return
+        try:
+            store = self._store()
+            mapping = None
+            for m in store.list_global_etf_trade_mappings(research_asset_code=research_asset, trade_asset_code=trade_code):
+                mapping = m
+                break
+            if mapping is None:
+                self.page_status.setText("未找到该映射")
+                return
+            mapping["status"] = status
+            store.upsert_global_etf_trade_mapping(mapping)
+            self._refresh_mapping_table()
+            self.page_status.setText(f"已{('停用' if status == 'INACTIVE' else '启用')}映射 {trade_code}")
+        except Exception as exc:
+            self.page_status.setText(f"操作失败：{exc}")
+
+    def _mapping_trade_at(self, row: int) -> str:
+        item = self.mapping_table.item(row, 1)
+        return item.text() if item else ""
 
     # ---- 重算与动作 ----
 
