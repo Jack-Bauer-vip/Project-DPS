@@ -16,6 +16,7 @@ akshare>=1.18.0
 # openpyxl>=3.0.0     # Excel 报告生成
 # scipy>=1.10.0       # 风险平价优化
 # scikit-learn        # 逻辑回归概率合成
+# reportlab>=4.0.0    # SYSTEM_MANUAL.pdf 生成（scripts/build_system_manual_pdf.py）
 
 # 开发依赖
 # pytest>=7.0.0
