@@ -1,13 +1,13 @@
 # 后续任务
 
-## P0：恢复全球宏观数据
+## P0：恢复全球宏观数据（已完成）
 
-1. 为 `fetch_global_macro_data.py` 增加 FRED 本地 CSV 导入。
-2. 支持 `DGS10.csv`、`DGS2.csv`、`DGS30.csv`、`DFII10.csv`。
-3. 对没有 `available_at` 的手动文件降低质量等级并记录警告。
-4. 恢复或导入完整 FRED 历史数据。
-5. 运行 `notebooks/global_macro_lab.ipynb`。
-6. 人工审阅 SPY、TLT、GLD 条件收益表。
+1. ✅ 为 `fetch_global_macro_data.py` 增加 FRED 本地 CSV 导入。
+2. ✅ 支持 `DGS10.csv`、`DGS2.csv`、`DGS30.csv`、`DFII10.csv`。
+3. ✅ 对没有 `available_at` 的手动文件降低质量等级并记录警告。
+4. ✅ 恢复或导入完整 FRED 历史数据。
+5. ✅ 运行 `notebooks/global_macro_lab.ipynb`。
+6. ✅ 人工审阅 SPY、TLT、GLD 条件收益表。
 
 ## P1：人工确认宏观规则（已完成）
 
