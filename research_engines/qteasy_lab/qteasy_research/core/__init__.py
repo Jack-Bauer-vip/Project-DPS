@@ -6,6 +6,7 @@ from qteasy_research.core.global_etf_engine import (
     initialize_default_global_etf_profiles,
 )
 from qteasy_research.core.global_etf_trade_conversion import convert_research_score_to_trade
+from qteasy_research.core.global_etf_trade_fetcher import fetch_trade_asset_info
 from qteasy_research.core.global_etf_trade_mapping import (
     effective_trade_mapping,
     initialize_default_global_etf_trade_mappings,
@@ -18,4 +19,5 @@ __all__ = [
     "effective_trade_mapping",
     "initialize_default_global_etf_trade_mappings",
     "convert_research_score_to_trade",
+    "fetch_trade_asset_info",
 ]

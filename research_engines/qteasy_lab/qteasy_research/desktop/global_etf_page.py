@@ -39,6 +39,7 @@ from qteasy_research.core.global_etf_engine import (
     initialize_default_global_etf_profiles,
 )
 from qteasy_research.core.global_etf_trade_conversion import convert_research_score_to_trade
+from qteasy_research.core.global_etf_trade_fetcher import fetch_trade_asset_info
 from qteasy_research.core.global_etf_trade_mapping import effective_trade_mapping
 from qteasy_research.pretrade.storage import ResearchStore
 
@@ -194,6 +195,26 @@ class GlobalEtfScoreWorker(QThread):
             self.failed.emit(f"{type(exc).__name__}: {exc}")
 
 
+class TradeAssetFetchWorker(QThread):
+    """后台抓取交易资产信息（名称/管理费/折溢价/跟踪误差），避免网络阻塞 UI。"""
+
+    completed = Signal(object)
+
+    def __init__(self, *, code: str, data_root: str | Path, parent=None) -> None:
+        super().__init__(parent)
+        self.code = code
+        self.data_root = data_root
+
+    def run(self) -> None:
+        try:
+            result = fetch_trade_asset_info(self.code, self.data_root)
+            self.completed.emit(result)
+        except Exception as exc:
+            self.completed.emit(
+                type("FailedFetch", (), {"code": self.code, "notes": [f"抓取失败：{exc}"]})()
+            )
+
+
 class GlobalEtfPage(QWidget):
     status_message = Signal(str)
 
@@ -202,6 +223,7 @@ class GlobalEtfPage(QWidget):
         self.store_root = Path(store_root)
         self.data_root = Path(data_root) if data_root else self.store_root.parent / "data"
         self.score_worker: GlobalEtfScoreWorker | None = None
+        self.fetch_worker: TradeAssetFetchWorker | None = None
         self._last_scores: list[dict[str, Any]] | None = None
         self._build_ui()
         self.refresh()
@@ -374,6 +396,9 @@ class GlobalEtfPage(QWidget):
         form = QFormLayout()
         self.mapping_trade_code = QLineEdit()
         self.mapping_trade_code.setPlaceholderText("如 513500.SH / 007300.OF / 518880.SH")
+        self.mapping_trade_code = QLineEdit()
+        self.mapping_trade_code.setPlaceholderText("输入代码后回车/失焦自动抓取，如 513500.SH")
+        self.mapping_trade_code.editingFinished.connect(self._auto_fetch_from_code)
         form.addRow("交易资产代码", self.mapping_trade_code)
         self.mapping_trade_name = QLineEdit()
         form.addRow("交易资产名称", self.mapping_trade_name)
@@ -382,6 +407,12 @@ class GlobalEtfPage(QWidget):
         form.addRow("交易币种", self.mapping_currency)
         self.mapping_fx_rule = QComboBox()
         self.mapping_fx_rule.addItems(["static", "manual", "realtime", "estimate"])
+        # 汇率方式四选项说明
+        self.mapping_fx_rule.setItemData(0, "static：固定静态汇率，QDII 净值已含汇率，收益不再额外调整。需填写汇率。", Qt.ItemDataRole.ToolTipRole)
+        self.mapping_fx_rule.setItemData(1, "manual：手动维护汇率，无自动更新。", Qt.ItemDataRole.ToolTipRole)
+        self.mapping_fx_rule.setItemData(2, "realtime：实时汇率，联网取当前市价汇率。", Qt.ItemDataRole.ToolTipRole)
+        self.mapping_fx_rule.setItemData(3, "estimate：估计汇率（估算值，精度较低）。", Qt.ItemDataRole.ToolTipRole)
+        self.mapping_fx_rule.setToolTip("汇率方式：static 静态固定 / manual 手动 / realtime 实时 / estimate 估算")
         form.addRow("汇率方式", self.mapping_fx_rule)
         self.mapping_exchange_rate = QDoubleSpinBox()
         self.mapping_exchange_rate.setRange(0.0, 100.0)
@@ -409,6 +440,10 @@ class GlobalEtfPage(QWidget):
         self.mapping_priority.setValue(1)
         form.addRow("优先级(小优先)", self.mapping_priority)
         form_row = QHBoxLayout()
+        self.mapping_fetch_button = QPushButton("自动抓取")
+        self.mapping_fetch_button.setToolTip("按交易资产代码抓取名称/管理费/折溢价/跟踪误差")
+        self.mapping_fetch_button.clicked.connect(self._auto_fetch_from_code)
+        form_row.addWidget(self.mapping_fetch_button)
         self.mapping_save_button = QPushButton("保存映射")
         self.mapping_save_button.clicked.connect(self.save_mapping)
         self.mapping_deactivate_button = QPushButton("停用选中")
@@ -717,6 +752,42 @@ class GlobalEtfPage(QWidget):
             "status": "ACTIVE",
         }
         return payload
+
+    def _auto_fetch_from_code(self) -> None:
+        """按交易资产代码后台抓取名称/管理费/折溢价/跟踪误差并回填表单。"""
+        code = self.mapping_trade_code.text().strip()
+        if not code:
+            self.page_status.setText("请先填写交易资产代码")
+            return
+        if self.fetch_worker is not None and self.fetch_worker.isRunning():
+            return
+        self.page_status.setText(f"正在抓取 {code} 信息…")
+        self.mapping_fetch_button.setEnabled(False)
+        self.fetch_worker = TradeAssetFetchWorker(code=code, data_root=self.data_root, parent=self)
+        self.fetch_worker.completed.connect(self._on_fetch_completed)
+        self.fetch_worker.finished.connect(self._on_fetch_finished)
+        self.fetch_worker.start()
+
+    def _on_fetch_completed(self, result: Any) -> None:
+        code = self.mapping_trade_code.text().strip()
+        name = getattr(result, "name", None)
+        if name:
+            self.mapping_trade_name.setText(str(name))
+        management_fee = getattr(result, "management_fee", None)
+        if management_fee is not None:
+            self.mapping_management_fee.setValue(float(management_fee))
+        premium = getattr(result, "premium_discount", None)
+        if premium is not None:
+            self.mapping_premium_discount.setValue(float(premium))
+        tracking = getattr(result, "tracking_error", None)
+        if tracking is not None:
+            self.mapping_tracking_error.setValue(float(tracking))
+        notes = getattr(result, "notes", None) or []
+        hint = "；".join(notes) if notes else "抓取完成，字段已回填"
+        self.page_status.setText(f"{code}：{hint}")
+
+    def _on_fetch_finished(self) -> None:
+        self.mapping_fetch_button.setEnabled(True)
 
     def save_mapping(self) -> None:
         research_asset = self.mapping_asset_combo.currentText()
