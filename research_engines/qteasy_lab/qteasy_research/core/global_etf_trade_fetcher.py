@@ -85,12 +85,31 @@ def _read_csv(path: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _normalize_code(code: str) -> str:
+    """把证券代码规范化为纯数字前缀，用于宽容匹配。
+
+    `518880`、`518880.sh`、`518880.SH`、`SH518880` 都归一化为 `518880`。
+    """
+    text = str(code).strip().upper()
+    # 去掉交易所后缀（.SH/.SZ/.OF 等）与前缀（SH/SZ）
+    text = text.replace(".SH", "").replace(".SZ", "").replace(".OF", "")
+    text = text.replace("SH", "").replace("SZ", "")
+    return text.strip()
+
+
 def fetch_local_fund_basic(code: str, data_root: str | Path) -> dict[str, Any] | None:
-    """从本地 fund_basic.csv 查名称与管理费。返回 None 表示本地无该基金。"""
+    """从本地 fund_basic.csv 查名称与管理费。返回 None 表示本地无该基金。
+
+    代码匹配宽容：`518880`、`518880.sh`、`518880.SH` 均可匹配 `518880.SH`。
+    """
     frame = _read_csv(Path(data_root) / "fund_basic.csv")
     if frame.empty or "ts_code" not in frame:
         return None
-    match = frame[frame["ts_code"].astype(str).str.upper() == code.upper()]
+    needle = _normalize_code(code)
+    if not needle:
+        return None
+    codes = frame["ts_code"].astype(str)
+    match = frame[codes.map(_normalize_code) == needle]
     if match.empty:
         return None
     row = match.iloc[0]
@@ -142,11 +161,18 @@ def fetch_tushare_fund_basic(code: str) -> dict[str, Any] | None:
     return result or None
 
 
-def fetch_premium_discount_akshare(code: str) -> float | None:
-    """从 AKShare fund_etf_spot_em 获取场内 ETF 的基金折价率（%）。
+_SPOT_CACHE: dict[str, Any] = {}
+_SPOT_CACHE_TTL_SECONDS = 600  # 场内 ETF 实时表缓存 10 分钟
 
-    返回折溢价百分比（如 -7.5 表示折价 7.5%）。仅场内 ETF 适用；失败返回 None。
-    """
+
+def _fetch_etf_spot_frame():
+    """抓取 AKShare 场内 ETF 实时行情表（带 10 分钟缓存，折溢价/名称共用）。"""
+    global _SPOT_CACHE
+    import time
+
+    cached_at = _SPOT_CACHE.get("cached_at")
+    if cached_at is not None and (time.time() - cached_at) < _SPOT_CACHE_TTL_SECONDS:
+        return _SPOT_CACHE.get("frame")
     try:
         import akshare as ak
     except ImportError:
@@ -155,9 +181,19 @@ def fetch_premium_discount_akshare(code: str) -> float | None:
         frame = ak.fund_etf_spot_em()
     except Exception:
         return None
+    _SPOT_CACHE = {"cached_at": time.time(), "frame": frame}
+    return frame
+
+
+def fetch_premium_discount_akshare(code: str) -> float | None:
+    """从 AKShare fund_etf_spot_em 获取场内 ETF 的基金折价率（%）。
+
+    返回折溢价百分比（如 -7.5 表示折价 7.5%）。仅场内 ETF 适用；失败返回 None。
+    """
+    frame = _fetch_etf_spot_frame()
     if frame is None or frame.empty or "代码" not in frame:
         return None
-    numeric = code.split(".", 1)[0]
+    numeric = _normalize_code(code)
     match = frame[frame["代码"].astype(str) == numeric]
     if match.empty or "基金折价率" not in match:
         return None
@@ -166,6 +202,22 @@ def fetch_premium_discount_akshare(code: str) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def fetch_name_akshare(code: str) -> str | None:
+    """从 AKShare fund_etf_spot_em 获取场内 ETF 的名称。
+
+    作为本地/Tushare 基础资料缺失时的名称回退（仅场内 ETF）。失败返回 None。
+    """
+    frame = _fetch_etf_spot_frame()
+    if frame is None or frame.empty or "代码" not in frame or "名称" not in frame:
+        return None
+    numeric = _normalize_code(code)
+    match = frame[frame["代码"].astype(str) == numeric]
+    if match.empty:
+        return None
+    value = match.iloc[0]["名称"]
+    return str(value) if pd.notna(value) and str(value).strip() else None
 
 
 def compute_tracking_error(
@@ -224,7 +276,11 @@ def compute_tracking_error(
 
 def _to_daily_returns(frame: pd.DataFrame, code: str) -> pd.Series | None:
     """从行情帧提取某代码的日收益率序列（按 trade_date 排序）。"""
-    sub = frame[frame["ts_code"].astype(str).str.upper() == code.upper()]
+    needle = _normalize_code(code)
+    if not needle:
+        return None
+    codes = frame["ts_code"].astype(str)
+    sub = frame[codes.map(_normalize_code) == needle]
     if sub.empty or "close" not in sub or "trade_date" not in sub:
         return None
     series = pd.to_numeric(sub["close"], errors="coerce").dropna()
@@ -242,7 +298,11 @@ def _resolve_benchmark_code(code: str, data_root: str | Path) -> str | None:
     frame = _read_csv(Path(data_root) / "fund_basic.csv")
     if frame.empty or "ts_code" not in frame or "benchmark" not in frame:
         return None
-    match = frame[frame["ts_code"].astype(str).str.upper() == code.upper()]
+    needle = _normalize_code(code)
+    if not needle:
+        return None
+    codes = frame["ts_code"].astype(str)
+    match = frame[codes.map(_normalize_code) == needle]
     if match.empty:
         return None
     benchmark_text = str(match.iloc[0].get("benchmark") or "")
@@ -281,9 +341,9 @@ def fetch_trade_asset_info(
     计算。所有失败均不抛异常，写入 notes 说明。
     """
     result = TradeAssetFetchResult(code=code)
-    normalized = code.strip().upper()
+    normalized = code.strip()
 
-    # 名称 + 管理费：本地 CSV 优先，Tushare 回退
+    # 名称 + 管理费：本地 CSV 优先，Tushare 回退，AKShare 名称兜底
     local = fetch_local_fund_basic(normalized, data_root)
     if local:
         result.name = local.get("name")
@@ -296,6 +356,12 @@ def fetch_trade_asset_info(
             result.management_fee = remote.get("management_fee")
         else:
             result.notes.append("Tushare 未返回基础资料（需 TUSHARE_TOKEN 且联网）")
+    if result.name is None:
+        ak_name = fetch_name_akshare(normalized)
+        if ak_name:
+            result.name = ak_name
+        else:
+            result.notes.append("AKShare 未获取到名称（仅场内 ETF 支持）")
 
     # 折溢价：AKShare 场内 ETF 实时
     result.premium_discount = fetch_premium_discount_akshare(normalized)

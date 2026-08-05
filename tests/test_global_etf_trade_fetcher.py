@@ -150,11 +150,14 @@ class FetchTradeAssetInfoTests(unittest.TestCase):
         self.temp.cleanup()
 
     def _fetch(self, code: str, premium: float | None = None) -> TradeAssetFetchResult:
-        """mock 掉 AKShare 折溢价联网调用后执行抓取。"""
+        """mock 掉 AKShare 折溢价/名称联网调用后执行抓取（离线）。"""
         import unittest.mock as mock
         with mock.patch(
             "qteasy_research.core.global_etf_trade_fetcher.fetch_premium_discount_akshare",
             return_value=premium,
+        ), mock.patch(
+            "qteasy_research.core.global_etf_trade_fetcher.fetch_name_akshare",
+            return_value=None,
         ):
             return fetch_trade_asset_info(code, self.root)
 
