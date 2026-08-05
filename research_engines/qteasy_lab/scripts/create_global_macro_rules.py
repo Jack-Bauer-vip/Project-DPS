@@ -7,6 +7,7 @@
 
 规则只经人工确认后 APPROVED；引擎只读取 status='APPROVED' 的规则。
 无数据状态（期限结构/利率平稳等）默认为保守中性 1.00 且不落库，避免掩盖缺失证据。
+每次写入/审核都会在 global_etf_macro_rule_history 留下版本快照（create/update/approve）。
 """
 
 from __future__ import annotations
@@ -204,10 +205,8 @@ def approve_eligible_rules(store: ResearchStore) -> list[dict[str, Any]]:
         if rule["macro_state"] in NO_DATA_STATES:
             rejected.append(f"{rule['asset_code']}/{rule['macro_state']}: 无数据保守中性，拒绝 APPROVED")
             continue
-        rule["status"] = "APPROVED"
-        rule["approved_by"] = "manual"
-        store.upsert_global_etf_macro_rule(rule)
-        approved.append(rule)
+        # 走专用审核路径，保证历史表中 action=approve 可审计。
+        approved.append(store.approve_global_etf_macro_rule(rule["rule_id"], approved_by="manual"))
     for message in rejected:
         print("拒绝 APPROVED：", message)
     return approved

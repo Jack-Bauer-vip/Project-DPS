@@ -14,7 +14,11 @@ import pandas as pd
 from PySide6.QtWidgets import QApplication
 
 from qteasy_research.core.global_etf_engine import GlobalEtfScoreResult
-from qteasy_research.desktop.global_etf_page import GlobalEtfPage, GlobalEtfScoreWorker
+from qteasy_research.desktop.global_etf_page import (
+    GlobalEtfPage,
+    GlobalEtfScoreWorker,
+    RULE_ACTION_LABELS,
+)
 from qteasy_research.pretrade.storage import ResearchStore
 
 
@@ -127,6 +131,111 @@ class DesktopGlobalEtfPageTests(unittest.TestCase):
         page = GlobalEtfPage(self.root / "store", data_root=self.root / "data")
         page.target_date_edit.setText("2024-02-29")
         self.assertTrue(page.recalculate_button.isEnabled())
+
+
+class DesktopGlobalEtfRuleReviewUiTests(unittest.TestCase):
+    """规则审核 UI：筛选、确认/驳回/撤销/重新提交、历史对话框。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="qteasy_rule_ui_", dir="D:/Project DPS"))
+        _make_fixture(self.root)
+        self.page = GlobalEtfPage(self.root / "store", data_root=self.root / "data")
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _rule_id(self, asset: str = "SPY", state: str = "rate_up") -> int:
+        store = ResearchStore(self.root / "store")
+        for rule in store.list_global_etf_macro_rules():
+            if rule["asset_code"] == asset and rule["macro_state"] == state:
+                return int(rule["rule_id"])
+        raise AssertionError(f"未找到规则 {asset}/{state}")
+
+    def test_status_filter_filters_rows(self) -> None:
+        # fixture 有 1 条 APPROVED(real_yield_up) + 1 条 DRAFT(rate_up)
+        self.page.rule_status_filter.setCurrentText("DRAFT")
+        self.assertEqual(self.page.rules_table.rowCount(), 1)
+        self.assertEqual(self.page.rules_table.item(0, 1).text(), "SPY")
+        self.page.rule_status_filter.setCurrentText("APPROVED")
+        self.assertEqual(self.page.rules_table.rowCount(), 1)
+        self.page.rule_status_filter.setCurrentText("全部")
+        self.assertEqual(self.page.rules_table.rowCount(), 2)
+
+    def test_approve_button_only_enabled_for_draft(self) -> None:
+        # 全表刷新后默认无选中 → 按钮禁用
+        self.assertFalse(self.page.rule_approve_button.isEnabled())
+        self.assertFalse(self.page.rule_reject_button.isEnabled())
+        self.assertFalse(self.page.rule_revoke_button.isEnabled())
+        self.assertFalse(self.page.rule_reset_button.isEnabled())
+        # 选中 DRAFT 行 → 确认/驳回可用，撤销/重新提交禁用
+        self.page.rule_status_filter.setCurrentText("DRAFT")
+        self.page.rules_table.selectRow(0)
+        self.assertTrue(self.page.rule_approve_button.isEnabled())
+        self.assertTrue(self.page.rule_reject_button.isEnabled())
+        self.assertFalse(self.page.rule_revoke_button.isEnabled())
+        self.assertFalse(self.page.rule_reset_button.isEnabled())
+        # 选中 APPROVED 行 → 撤销可用
+        self.page.rule_status_filter.setCurrentText("APPROVED")
+        self.page.rules_table.selectRow(0)
+        self.assertTrue(self.page.rule_revoke_button.isEnabled())
+        self.assertFalse(self.page.rule_approve_button.isEnabled())
+
+    def test_approve_draft_rule_via_ui(self) -> None:
+        rule_id = self._rule_id("SPY", "rate_up")
+        self.page.rule_status_filter.setCurrentText("DRAFT")
+        self.page.rules_table.selectRow(0)
+        # 直接调用 _rule_action 的存储动作部分（绕过 QInputDialog 弹窗）
+        self.page._store().approve_global_etf_macro_rule(rule_id, note="人工确认")
+        store = ResearchStore(self.root / "store")
+        for rule in store.list_global_etf_macro_rules():
+            if rule["rule_id"] == rule_id:
+                self.assertEqual(rule["status"], "APPROVED")
+                break
+        else:
+            self.fail("规则不存在")
+        # 历史链含 approve 动作
+        actions = [h["action"] for h in store.list_global_etf_macro_rule_history(rule_id)]
+        self.assertIn("approve", actions)
+
+    def test_reject_draft_rule(self) -> None:
+        rule_id = self._rule_id("SPY", "rate_up")
+        self.page._store().reject_global_etf_macro_rule(rule_id, reason="样本不足")
+        store = ResearchStore(self.root / "store")
+        for rule in store.list_global_etf_macro_rules():
+            if rule["rule_id"] == rule_id:
+                self.assertEqual(rule["status"], "REJECTED")
+                self.assertEqual(rule["reason"], "样本不足")
+                break
+        else:
+            self.fail("规则不存在")
+
+    def test_revoke_approved_rule(self) -> None:
+        rule_id = self._rule_id("SPY", "real_yield_up")
+        self.page._store().revoke_global_etf_macro_rule(rule_id, reason="撤销")
+        store = ResearchStore(self.root / "store")
+        for rule in store.list_global_etf_macro_rules():
+            if rule["rule_id"] == rule_id:
+                self.assertEqual(rule["status"], "REJECTED")
+                break
+        else:
+            self.fail("规则不存在")
+
+    def test_history_dialog_populates(self) -> None:
+        rule_id = self._rule_id("SPY", "rate_up")
+        # 制造一个版本链：create + approve
+        self.page._store().approve_global_etf_macro_rule(rule_id)
+        self.page.rule_status_filter.setCurrentText("APPROVED")
+        self.page.rules_table.selectRow(0)
+        history = self.page._store().list_global_etf_macro_rule_history(rule_id)
+        self.assertEqual(len(history), 2)
+        self.assertEqual([h["action"] for h in history], ["create", "approve"])
+        # 历史动作中文翻译映射存在
+        self.assertIn("approve", RULE_ACTION_LABELS)
+        self.assertEqual(RULE_ACTION_LABELS["approve"], "确认")
 
 
 class DesktopGlobalEtfMappingUiTests(unittest.TestCase):

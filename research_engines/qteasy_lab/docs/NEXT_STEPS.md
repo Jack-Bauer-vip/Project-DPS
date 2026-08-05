@@ -55,9 +55,27 @@
 - 支持保存（upsert）、停用（INACTIVE）、删除；表格提示当前生效映射（ACTIVE + min priority）。
 - `storage.py` 新增 `delete_global_etf_trade_mapping`。
 
-### 后续（尚未开始）
+### 交易资产换算逻辑（P4，已完成）
 
-- 汇率差异、管理费和交易成本的换算逻辑；
-- 跟踪误差和折溢价展示（当前仅字段展示）。
+- ✅ 新增 `core/global_etf_trade_conversion.py`：把研究评分换算到交易口径。
+  - 管理费采用相对费用差异：只扣交易资产比研究资产多出的年化管理费（SPY 0.09% / TLT 0.15% / GLD 0.40%），避免重复计算研究资产自身成本；
+  - 交易成本按 `trading_cost_bps/10000` 一次性折减；费用+成本合计超过 50% 时按比例压缩到上限并记警告；
+  - 汇率：A 股 QDII 净值已含汇率、收益已是人民币口径，不额外调整收益；静态汇率无时间变动信息，不假设汇率变动，仅生成 `fx_note` 展示水平与敞口提示（保守，符合基线决策）；
+  - 跟踪误差与折溢价仅透传展示，不进入评分计算。
+- ✅ 桌面端新增"交易口径换算"独立表格（映射配置区上方）：对最近一次评分的每行取生效映射换算，独立展示，不改动研究口径 `final_score`。
+- ✅ 新增 `tests/test_global_etf_trade_conversion.py`（19 项），全量测试 137 项通过。
+
+## P5：宏观规则版本比较与规则审核（已完成）
+
+- ✅ 新增 `global_etf_macro_rule_history` 独立历史表（append-only 版本链）：每次 upsert（create/update）与审核动作都在历史表落快照，可追溯"为什么 modifier 从 1.10 改成 1.05"。
+- ✅ 审核状态机（storage.py）：`approve`（DRAFT→APPROVED）、`reject`（DRAFT→REJECTED）、`revoke`（APPROVED→REJECTED）、`reset`（REJECTED→DRAFT 重新审核）。新增 REJECTED 状态与 `rejected_by/rejected_at/reason` 三列（含旧库迁移）；驳回/撤销保留审计记录而非删除；REJECTED 天然被引擎忽略（`get_global_etf_macro_rules` 硬编码 APPROVED）。
+- ✅ 桌面端"宏观规则状态"区升级：状态筛选（全部/DRAFT/APPROVED/REJECTED）+ 确认/驳回/撤销/重新提交/历史按钮，按钮按选中行状态启停，QInputDialog 收集审核意见，"历史"弹对话框展示版本链（动作/状态/modifier/样本/置信度/意见/时间）。
+- ✅ `scripts/create_global_macro_rules.py` 的 `approve_eligible_rules` 改走专用 `approve_global_etf_macro_rule`，保证历史表中 action=approve。
+- ✅ 新增 `tests/test_global_etf_rule_review.py`（15 项）+ 桌面端规则审核测试（6 项），全量测试 158 项通过。
+- 说明：既有 12 条规则的历史链为空（历史机制从功能上线后开始记录），新变更即产生版本。
+
+### 待办（下一项）
+
+- 暂无剩余 P4/P5 待办；剩余长期项为利率状态（rate_up/rate_down）样本积累到 60 后人工复核（约 2027 年）。
 
 仍不得自动生成交易指令或自动修改组合权重。

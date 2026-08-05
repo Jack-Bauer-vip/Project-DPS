@@ -44,6 +44,15 @@
 - 引擎在当前宏观状态返回 PARTIAL（base_score 可算，final_score 为空）为常态，属安全设计，不自动改变。
 - rate_up 需等样本自然积累到 60（约 2027 年）再人工复核；届时若宏观状态不含无数据分量，评分可能 COMPLETED。
 
+## 规则审核与版本决策（2026-08-05 记录）
+
+- 规则版本用**独立历史表**（`global_etf_macro_rule_history`，append-only）：每次 upsert（create/update）与审核动作都落变更后快照，主表保留当前值，不破坏现有唯一约束。
+- 审核状态机补全 REJECTED：确认（DRAFT→APPROVED）、驳回（DRAFT→REJECTED）、撤销（APPROVED→REJECTED）、重新提交（REJECTED→DRAFT）。REJECTED 是人工决策，与 SUSPENDED（止损/数据问题暂停）区分；驳回/撤销保留审计记录而非删除，REJECTED 规则可出现在历史对比中提示"该方向已被否定"。
+- 审核动作走专用方法（approve/reject/revoke/reset），不走 upsert，保证历史表中 action 语义准确（approve ≠ update）。
+- REJECTED 天然不参与评分：`get_global_etf_macro_rules` 硬编码 `status='APPROVED'`，引擎无需改动。
+- 既有规则无历史记录（机制从上线后开始记录）；主表新增列用 PRAGMA+ALTER 迁移，旧库无损。
+- 同一 (asset,state) 重复 APPROVED 受部分唯一索引约束，upsert 显式拦截并提示先撤销。
+
 ## 安全边界
 
 - 不自动修改正式资产池。

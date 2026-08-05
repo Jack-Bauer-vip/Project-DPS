@@ -1,23 +1,23 @@
 # 项目状态
 
-更新时间：2026-08-04
+更新时间：2026-08-05
 
 ## 版本状态
 
 - 分支：`develop`
-- 最近提交：`d89ae15`（基线收尾）、`ced2476`、`4bf7ace`、`beedd3f`、`8c6c539`、`e9f5a13`、`74a9b4e`
-- 工作区：干净（全部工作成果已入库）。
+- 最近提交：`eb4c48e`（P3 完成收尾）、`d89ae15`（基线收尾）、`ced2476`、`4bf7ace`、`beedd3f`、`8c6c539`、`e9f5a13`、`74a9b4e`
+- 工作区：有未提交改动（P4 交易资产换算 + P5 规则审核，待确认提交）。
 
 ## 验证结果
 
 从 `qteasy_lab` 目录执行全量离线测试：
 
 ```text
-Ran 118 tests
+Ran 158 tests
 OK
 ```
 
-包括 GlobalEtfEngine 5 项离线 fixture、FRED 本地导入 15 项、宏观规则 15 项、映射 19 项、桌面端页面/映射 UI 9 项等。
+包括 GlobalEtfEngine 5 项离线 fixture、FRED 本地导入 15 项、宏观规则 15 项、映射 19 项、交易换算 19 项、规则审核状态机 15 项、桌面端页面/映射/审核 UI 15 项等。
 
 ## 已完成
 
@@ -44,13 +44,18 @@ OK
 - SPY/TLT/GLD 研究配置已启用；
 - GlobalEtfEngine 真实评分，输出落 `data/global_etf_values/`；
 - 桌面端全球 ETF 宏观研究页面（`GlobalEtfPage`）；
-- 研究资产↔交易资产映射数据模型 + 桌面端映射配置 UI。
+- 研究资产↔交易资产映射数据模型 + 桌面端映射配置 UI；
+- 交易资产换算逻辑（`core/global_etf_trade_conversion.py` + 桌面端"交易口径换算"独立表格）：相对费用差异 + 一次性交易成本折减，汇率不调整收益仅展示，跟踪误差/折溢价透传展示。
+
+### 规则审核与版本（P5）
+
+- `global_etf_macro_rule_history` 独立历史表（append-only 版本链）；
+- 审核状态机：approve/reject/revoke/reset，新增 REJECTED 状态与 `rejected_by/rejected_at/reason` 列（含旧库迁移）；
+- 桌面端规则区：状态筛选 + 确认/驳回/撤销/重新提交/历史按钮。
 
 ## 未完成
 
-- 利率状态（rate_up/rate_down）样本 <60 个月，仍为 DRAFT/CANDIDATE，尚未 APPROVED（等样本积累到 60，约 2027 年再人工复核）；
-- 交易资产换算逻辑（汇率差异、管理费和交易成本的应用）；
-- 宏观规则版本比较和规则审核 UI。
+- 利率状态（rate_up/rate_down）样本 <60 个月，仍为 DRAFT/CANDIDATE，尚未 APPROVED（等样本积累到 60，约 2027 年再人工复核）。
 
 ## 当前运行状态
 

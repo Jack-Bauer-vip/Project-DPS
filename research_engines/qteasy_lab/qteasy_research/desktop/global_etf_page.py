@@ -15,11 +15,13 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -36,6 +38,7 @@ from qteasy_research.core.global_etf_engine import (
     GlobalEtfEngine,
     initialize_default_global_etf_profiles,
 )
+from qteasy_research.core.global_etf_trade_conversion import convert_research_score_to_trade
 from qteasy_research.core.global_etf_trade_mapping import effective_trade_mapping
 from qteasy_research.pretrade.storage import ResearchStore
 
@@ -71,6 +74,7 @@ CONDITION_COLUMN_LABELS = {
 
 # 规则状态表列中文翻译
 RULE_COLUMN_LABELS = {
+    "rule_id": "ID",
     "asset_code": "资产",
     "macro_state": "状态",
     "modifier": "修正",
@@ -81,6 +85,34 @@ RULE_COLUMN_LABELS = {
     "sample_end": "样本止",
     "effective_date": "生效日",
     "approved_at": "批准时间",
+    "rejected_at": "驳回/撤销时间",
+    "reason": "审核意见",
+}
+
+# 规则历史版本表列中文翻译
+RULE_HISTORY_COLUMN_LABELS = {
+    "history_id": "版本",
+    "action": "动作",
+    "status": "规则状态",
+    "modifier": "修正",
+    "sample_count": "样本",
+    "confidence": "置信度",
+    "approved_by": "批准人",
+    "approved_at": "批准时间",
+    "rejected_by": "驳回人",
+    "rejected_at": "驳回时间",
+    "reason": "意见/原因",
+    "changed_at": "变更时间",
+}
+
+# 审核动作 → 中文动作名
+RULE_ACTION_LABELS = {
+    "create": "创建",
+    "update": "编辑",
+    "approve": "确认",
+    "reject": "驳回",
+    "revoke": "撤销",
+    "reset": "重新提交",
 }
 
 # 交易资产映射表列中文翻译
@@ -101,6 +133,24 @@ MAPPING_COLUMN_LABELS = {
     "trading_hours": "交易时段",
     "holiday_risk": "休市风险",
     "priority": "优先级",
+    "status": "状态",
+}
+
+# 交易口径换算表列中文翻译（独立展示，不改动研究评分）
+TRADE_CONVERSION_COLUMN_LABELS = {
+    "asset": "研究资产",
+    "trade_asset_code": "交易资产",
+    "trade_asset_name": "名称",
+    "currency": "币种",
+    "exchange_rate": "汇率",
+    "management_fee": "管理费%",
+    "trading_cost_bps": "成本bps",
+    "tracking_error": "跟踪误差%",
+    "premium_discount": "折溢价%",
+    "research_final_score": "研究评分",
+    "fee_adjustment": "费用调整",
+    "cost_adjustment": "成本调整",
+    "trade_final_score": "交易评分",
     "status": "状态",
 }
 
@@ -152,6 +202,7 @@ class GlobalEtfPage(QWidget):
         self.store_root = Path(store_root)
         self.data_root = Path(data_root) if data_root else self.store_root.parent / "data"
         self.score_worker: GlobalEtfScoreWorker | None = None
+        self._last_scores: list[dict[str, Any]] | None = None
         self._build_ui()
         self.refresh()
 
@@ -217,6 +268,9 @@ class GlobalEtfPage(QWidget):
         # 条件收益表
         root_layout.addWidget(self._build_condition_section(), 3)
 
+        # 交易口径换算区（独立展示，不改动研究评分）
+        root_layout.addWidget(self._build_trade_conversion_section(), 3)
+
         # 交易资产映射配置区
         root_layout.addWidget(self._build_mapping_section(), 3)
 
@@ -232,8 +286,40 @@ class GlobalEtfPage(QWidget):
     def _build_rules_section(self) -> QWidget:
         box = QGroupBox("宏观规则状态")
         layout = QVBoxLayout(box)
+
+        # 顶部：状态筛选 + 审核动作按钮
+        top = QHBoxLayout()
+        top.addWidget(QLabel("状态筛选"))
+        self.rule_status_filter = QComboBox()
+        self.rule_status_filter.addItems(["全部", "DRAFT", "APPROVED", "REJECTED"])
+        self.rule_status_filter.currentTextChanged.connect(lambda _: self._refresh_rules_table())
+        top.addWidget(self.rule_status_filter)
+        top.addStretch(1)
+        self.rule_approve_button = QPushButton("确认")
+        self.rule_approve_button.setToolTip("DRAFT → APPROVED，批准生效")
+        self.rule_approve_button.clicked.connect(lambda: self._rule_action("approve"))
+        top.addWidget(self.rule_approve_button)
+        self.rule_reject_button = QPushButton("驳回")
+        self.rule_reject_button.setToolTip("DRAFT → REJECTED，否定该规则")
+        self.rule_reject_button.clicked.connect(lambda: self._rule_action("reject"))
+        top.addWidget(self.rule_reject_button)
+        self.rule_revoke_button = QPushButton("撤销")
+        self.rule_revoke_button.setToolTip("APPROVED → REJECTED，废止已批准规则")
+        self.rule_revoke_button.clicked.connect(lambda: self._rule_action("revoke"))
+        top.addWidget(self.rule_revoke_button)
+        self.rule_reset_button = QPushButton("重新提交")
+        self.rule_reset_button.setToolTip("REJECTED → DRAFT，重新走审核")
+        self.rule_reset_button.clicked.connect(lambda: self._rule_action("reset"))
+        top.addWidget(self.rule_reset_button)
+        self.rule_history_button = QPushButton("历史")
+        self.rule_history_button.setToolTip("查看该规则的版本变更链")
+        self.rule_history_button.clicked.connect(self._show_rule_history)
+        top.addWidget(self.rule_history_button)
+        layout.addLayout(top)
+
         self.rules_table = QTableWidget()
         self._configure_table(self.rules_table)
+        self.rules_table.itemSelectionChanged.connect(self._on_rule_selection_changed)
         layout.addWidget(self.rules_table)
         return box
 
@@ -251,6 +337,14 @@ class GlobalEtfPage(QWidget):
         self.condition_table = QTableWidget()
         self._configure_table(self.condition_table)
         layout.addWidget(self.condition_table)
+        return box
+
+    def _build_trade_conversion_section(self) -> QWidget:
+        box = QGroupBox("交易口径换算（研究评分 → 可交易标的，独立参考）")
+        layout = QVBoxLayout(box)
+        self.trade_conversion_table = QTableWidget()
+        self._configure_table(self.trade_conversion_table)
+        layout.addWidget(self.trade_conversion_table)
         return box
 
     def _build_mapping_section(self) -> QWidget:
@@ -364,10 +458,11 @@ class GlobalEtfPage(QWidget):
     # ---- 数据加载与展示 ----
 
     def refresh(self) -> None:
-        """刷新数据状态、宏观状态、条件收益、规则状态与映射（不触发引擎重算）。"""
+        """刷新数据状态、宏观状态、条件收益、规则状态、换算与映射（不触发引擎重算）。"""
         self._refresh_status_macro()
         self._refresh_condition_table()
         self._refresh_rules_table()
+        self._refresh_trade_conversion_table()
         self._refresh_mapping_table()
         self.status_message.emit("全球 ETF 页面已刷新")
 
@@ -435,11 +530,150 @@ class GlobalEtfPage(QWidget):
         self._fill_table(self.condition_table, rows, CONDITION_COLUMN_LABELS)
 
     def _refresh_rules_table(self) -> None:
+        status = self.rule_status_filter.currentText()
         try:
-            rules = self._store().list_global_etf_macro_rules()
+            rules = self._store().list_global_etf_macro_rules(
+                status=None if status == "全部" else status
+            )
         except Exception:
             rules = []
         self._fill_table(self.rules_table, rules, RULE_COLUMN_LABELS)
+        self._on_rule_selection_changed()
+
+    def _selected_rule(self) -> dict[str, Any] | None:
+        """返回当前选中行的规则（按第一列 rule_id 反查）。"""
+        row = self.rules_table.currentRow()
+        if row < 0:
+            return None
+        item = self.rules_table.item(row, 0)
+        if item is None or not item.text().isdigit():
+            return None
+        rule_id = int(item.text())
+        for rule in self._store().list_global_etf_macro_rules():
+            if int(rule["rule_id"]) == rule_id:
+                return rule
+        return None
+
+    def _on_rule_selection_changed(self) -> None:
+        """按选中规则的当前状态启用/禁用审核按钮。"""
+        rule = self._selected_rule()
+        status = rule.get("status") if rule else None
+        self.rule_approve_button.setEnabled(status == "DRAFT")
+        self.rule_reject_button.setEnabled(status == "DRAFT")
+        self.rule_revoke_button.setEnabled(status == "APPROVED")
+        self.rule_reset_button.setEnabled(status == "REJECTED")
+        self.rule_history_button.setEnabled(rule is not None)
+
+    def _rule_action(self, action: str) -> None:
+        """执行确认/驳回/撤销/重新提交，收集可选审核意见。"""
+        rule = self._selected_rule()
+        if rule is None:
+            self.page_status.setText("请先选中要操作的规则行")
+            return
+        labels = {
+            "approve": ("确认规则", f"确认 {rule['asset_code']}/{rule['macro_state']} 为 APPROVED？"),
+            "reject": ("驳回规则", f"驳回 {rule['asset_code']}/{rule['macro_state']}？"),
+            "revoke": ("撤销规则", f"撤销已批准的 {rule['asset_code']}/{rule['macro_state']}？"),
+            "reset": ("重新提交", f"将 {rule['asset_code']}/{rule['macro_state']} 退回 DRAFT 重新审核？"),
+        }
+        title, prompt = labels[action]
+        note, ok = QInputDialog.getText(self, title, prompt + "\n审核意见（可空）：")
+        if not ok:
+            return
+        try:
+            store = self._store()
+            rule_id = int(rule["rule_id"])
+            if action == "approve":
+                store.approve_global_etf_macro_rule(rule_id, approved_by="manual", note=note.strip())
+            elif action == "reject":
+                store.reject_global_etf_macro_rule(rule_id, rejected_by="manual", reason=note.strip())
+            elif action == "revoke":
+                store.revoke_global_etf_macro_rule(rule_id, rejected_by="manual", reason=note.strip())
+            elif action == "reset":
+                store.reset_global_etf_macro_rule_to_draft(rule_id, note=note.strip())
+            self._refresh_rules_table()
+            self.page_status.setText(f"已{labels[action][0]}：{rule['asset_code']}/{rule['macro_state']}")
+        except ValueError as exc:
+            self.page_status.setText(f"操作失败：{exc}")
+
+    def _show_rule_history(self) -> None:
+        """弹出对话框展示选中规则的版本变更链。"""
+        rule = self._selected_rule()
+        if rule is None:
+            self.page_status.setText("请先选中要查看历史的规则行")
+            return
+        rule_id = int(rule["rule_id"])
+        try:
+            history = self._store().list_global_etf_macro_rule_history(rule_id)
+        except Exception as exc:
+            self.page_status.setText(f"读取历史失败：{exc}")
+            return
+        # 动作名翻译为中文
+        history = [
+            dict(row, action=RULE_ACTION_LABELS.get(row.get("action"), row.get("action")))
+            for row in history
+        ]
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(
+            f"规则历史：{rule['asset_code']}/{rule['macro_state']}（{len(history)} 个版本）"
+        )
+        dialog.resize(760, 420)
+        layout = QVBoxLayout(dialog)
+        table = QTableWidget()
+        self._configure_table(table)
+        layout.addWidget(table)
+        self._fill_table(table, history, RULE_HISTORY_COLUMN_LABELS)
+        if not history:
+            layout.addWidget(QLabel("暂无历史版本记录。"))
+        dialog.exec()
+
+    def _refresh_trade_conversion_table(self) -> None:
+        """按最近一次评分的每行评分做交易口径换算并展示。
+
+        未配置生效映射 → NO_MAPPING；研究评分不可用 → NO_RESEARCH_SCORE；
+        仅独立展示，不改动研究口径 final_score。
+        """
+        scores = {row.get("asset"): row for row in (self._last_scores or [])}
+        rows: list[dict[str, Any]] = []
+        for asset in GLOBAL_ETF_ASSETS:
+            score_row = scores.get(asset)
+            if score_row is None:
+                continue
+            try:
+                mapping = effective_trade_mapping(self._store(), asset)
+                converted = convert_research_score_to_trade(score_row, mapping)
+            except Exception as exc:
+                converted = {
+                    "asset": asset,
+                    "status": "ERROR",
+                    "research_final_score": score_row.get("final_score"),
+                    "trade_final_score": None,
+                    "warnings": [f"换算失败：{exc}"],
+                }
+            rows.append(converted)
+        self._fill_table(
+            self.trade_conversion_table,
+            rows,
+            TRADE_CONVERSION_COLUMN_LABELS,
+            widths={
+                "trade_asset_code": 130,
+                "research_final_score": 90,
+                "trade_final_score": 90,
+            },
+        )
+        # 汇率说明与警告放进行工具提示，避免撑宽表格
+        for row_index, converted in enumerate(rows):
+            tips: list[str] = []
+            fx_note = converted.get("fx_note")
+            if fx_note:
+                tips.append(str(fx_note))
+            tips.extend(str(w) for w in (converted.get("warnings") or []))
+            if tips:
+                for column in range(self.trade_conversion_table.columnCount()):
+                    item = self.trade_conversion_table.item(row_index, column)
+                    if item is not None:
+                        item.setToolTip("\n".join(tips))
 
     # ---- 交易资产映射 ----
 
@@ -578,9 +812,11 @@ class GlobalEtfPage(QWidget):
 
     def _on_score_completed(self, result: Any) -> None:
         rows = list(result.scores or [])
+        self._last_scores = rows
         self._fill_table(self.score_table, rows, SCORE_COLUMN_LABELS, widths={
             "asset": 60, "data_as_of": 110, "base_score": 100, "macro_modifier": 100, "final_score": 100, "warnings": 320,
         })
+        self._refresh_trade_conversion_table()
         warnings = "；".join(result.warnings) if result.warnings else "无警告"
         self.page_status.setText(f"完成：{len(rows)} 个资产；利率代理 {result.rate_proxy}；{warnings}")
         if result.output_csv:

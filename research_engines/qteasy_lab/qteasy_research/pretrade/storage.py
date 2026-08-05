@@ -370,9 +370,43 @@ class ResearchStore:
                     effective_date TEXT,
                     expiry_date TEXT,
                     status TEXT NOT NULL DEFAULT 'DRAFT',
+                    rejected_by TEXT,
+                    rejected_at TEXT,
+                    reason TEXT NOT NULL DEFAULT '',
                     UNIQUE(asset_code, macro_state, effective_date)
                 )
             """)
+            # 兼容已生成的历史库：为 global_etf_macro_rule 补齐审核相关列。
+            rule_columns = {row[1] for row in connection.execute("PRAGMA table_info(global_etf_macro_rule)")}
+            for column, definition in {
+                "rejected_by": "TEXT",
+                "rejected_at": "TEXT",
+                "reason": "TEXT NOT NULL DEFAULT ''",
+            }.items():
+                if column not in rule_columns:
+                    connection.execute(f"ALTER TABLE global_etf_macro_rule ADD COLUMN {column} {definition}")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS global_etf_macro_rule_history (
+                    history_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rule_id INTEGER NOT NULL,
+                    action TEXT NOT NULL,
+                    asset_code TEXT NOT NULL,
+                    macro_state TEXT NOT NULL,
+                    modifier REAL NOT NULL,
+                    sample_start TEXT,
+                    sample_end TEXT,
+                    sample_count INTEGER,
+                    confidence TEXT,
+                    status TEXT NOT NULL,
+                    approved_by TEXT,
+                    approved_at TEXT,
+                    rejected_by TEXT,
+                    rejected_at TEXT,
+                    reason TEXT NOT NULL DEFAULT '',
+                    changed_at TEXT NOT NULL
+                )
+            """)
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_global_etf_rule_history_lookup ON global_etf_macro_rule_history(rule_id, changed_at)")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS global_etf_score_snapshot (
                     snapshot_id TEXT PRIMARY KEY,
@@ -1235,45 +1269,223 @@ class ResearchStore:
         with self._connect() as connection:
             return [dict(row) for row in connection.execute(query, values).fetchall()]
 
+    # ---- 全球 ETF 宏观规则（含审核状态机与历史） ----
+
+    def _record_rule_history(
+        self,
+        connection: Any,
+        *,
+        rule_id: int,
+        action: str,
+        snapshot: dict[str, Any],
+    ) -> None:
+        """写入一条宏观规则历史快照（append-only 版本链）。
+
+        snapshot 为某次变更后的完整规则行；action 取值 create/update/approve/
+        reject/revoke/reset。历史表用于版本比较与审计追溯。
+        """
+        connection.execute(
+            """INSERT INTO global_etf_macro_rule_history
+            (rule_id,action,asset_code,macro_state,modifier,sample_start,sample_end,
+             sample_count,confidence,status,approved_by,approved_at,rejected_by,
+             rejected_at,reason,changed_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                rule_id, action, snapshot.get("asset_code", ""),
+                snapshot.get("macro_state", ""), float(snapshot.get("modifier") or 0.0),
+                snapshot.get("sample_start"), snapshot.get("sample_end"),
+                snapshot.get("sample_count"), snapshot.get("confidence"),
+                snapshot.get("status", "DRAFT"), snapshot.get("approved_by"),
+                snapshot.get("approved_at"), snapshot.get("rejected_by"),
+                snapshot.get("rejected_at"), snapshot.get("reason", "") or "",
+                _now(),
+            ),
+        )
+
     def upsert_global_etf_macro_rule(self, rule: dict[str, Any]) -> dict[str, Any]:
+        """新增或更新宏观规则（DRAFT 数据编辑路径）。
+
+        每次变更都会在 global_etf_macro_rule_history 写入快照（create/update），
+        使历史版本可追溯。审核动作请使用 approve/reject/revoke 专用方法，
+        以便在历史表中留下正确的 action。
+        """
         payload = dict(rule)
         payload.setdefault("status", "DRAFT")
+        if payload["status"] not in self._MACRO_RULE_STATUS_VALUES:
+            raise ValueError(
+                f"status 必须是 {sorted(self._MACRO_RULE_STATUS_VALUES)}，收到：{payload['status']}"
+            )
         payload.setdefault("approved_by", "manual")
         if payload.get("status") == "APPROVED" and not payload.get("approved_at"):
             payload["approved_at"] = _now()
         with self._connect() as connection:
             existing = connection.execute(
-                """SELECT rule_id FROM global_etf_macro_rule
+                """SELECT * FROM global_etf_macro_rule
                 WHERE asset_code=? AND macro_state=? AND effective_date IS ?""",
                 (payload["asset_code"], payload["macro_state"], payload.get("effective_date")),
             ).fetchone()
             if existing:
                 payload["rule_id"] = existing["rule_id"]
+                # 若置为 APPROVED 而同一 (asset,state) 已有另一条 APPROVED → 部分唯一索引冲突
+                if payload["status"] == "APPROVED":
+                    conflict = connection.execute(
+                        """SELECT rule_id FROM global_etf_macro_rule
+                        WHERE asset_code=? AND macro_state=? AND status='APPROVED' AND rule_id<>?""",
+                        (payload["asset_code"], payload["macro_state"], payload["rule_id"]),
+                    ).fetchone()
+                    if conflict:
+                        raise ValueError(
+                            f"{payload['asset_code']}/{payload['macro_state']} 已有 APPROVED 规则 "
+                            f"(rule_id={conflict['rule_id']})，请先撤销旧规则再批准新规则。"
+                        )
                 connection.execute(
                     """UPDATE global_etf_macro_rule SET modifier=?,sample_start=?,sample_end=?,sample_count=?,
-                    confidence=?,approved_by=?,approved_at=?,effective_date=?,expiry_date=?,status=? WHERE rule_id=?""",
+                    confidence=?,approved_by=?,approved_at=?,effective_date=?,expiry_date=?,status=?,
+                    rejected_by=?,rejected_at=?,reason=? WHERE rule_id=?""",
                     (
                         float(payload["modifier"]), payload.get("sample_start"), payload.get("sample_end"),
                         payload.get("sample_count"), payload.get("confidence"), payload["approved_by"],
                         payload.get("approved_at"), payload.get("effective_date"), payload.get("expiry_date"),
-                        payload["status"], payload["rule_id"],
+                        payload["status"], payload.get("rejected_by"), payload.get("rejected_at"),
+                        payload.get("reason", "") or "", payload["rule_id"],
                     ),
+                )
+                self._record_rule_history(
+                    connection, rule_id=payload["rule_id"], action="update", snapshot=payload
                 )
             else:
                 cursor = connection.execute(
                     """INSERT INTO global_etf_macro_rule
                     (asset_code,macro_state,modifier,sample_start,sample_end,sample_count,confidence,
-                     approved_by,approved_at,effective_date,expiry_date,status)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                     approved_by,approved_at,effective_date,expiry_date,status,rejected_by,rejected_at,reason)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         payload["asset_code"], payload["macro_state"], float(payload["modifier"]),
                         payload.get("sample_start"), payload.get("sample_end"), payload.get("sample_count"),
                         payload.get("confidence"), payload["approved_by"], payload.get("approved_at"),
                         payload.get("effective_date"), payload.get("expiry_date"), payload["status"],
+                        payload.get("rejected_by"), payload.get("rejected_at"),
+                        payload.get("reason", "") or "",
                     ),
                 )
                 payload["rule_id"] = cursor.lastrowid
+                self._record_rule_history(
+                    connection, rule_id=payload["rule_id"], action="create", snapshot=payload
+                )
         return payload
+
+    def _transition_rule(
+        self,
+        rule_id: int,
+        *,
+        to_status: str,
+        action: str,
+        actor: str,
+        note: str,
+        allowed_from: set[str],
+    ) -> dict[str, Any]:
+        """审核状态机的通用转换：校验来源状态 → 更新主表 → 写历史。
+
+        action 决定历史语义（approve/reject/revoke/reset）；note 为审核意见。
+        与 upsert 不同，这里强制走专用审核路径，保证审计可追溯。
+        """
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM global_etf_macro_rule WHERE rule_id=?", (rule_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"宏观规则不存在：rule_id={rule_id}")
+            current = dict(row)
+            if current["status"] not in allowed_from:
+                raise ValueError(
+                    f"规则 {current['asset_code']}/{current['macro_state']} 当前状态 {current['status']} "
+                    f"不允许执行该审核动作（仅限 {sorted(allowed_from)}）。"
+                )
+            now = _now()
+            current["status"] = to_status
+            if action in ("approve", "create", "update"):
+                current["approved_by"] = actor
+                current["approved_at"] = now
+                current["rejected_by"] = None
+                current["rejected_at"] = None
+            if action in ("reject", "revoke", "reset"):
+                current["rejected_by"] = actor
+                current["rejected_at"] = now
+            current["reason"] = note or current.get("reason") or ""
+            connection.execute(
+                """UPDATE global_etf_macro_rule SET status=?,approved_by=?,approved_at=?,
+                rejected_by=?,rejected_at=?,reason=? WHERE rule_id=?""",
+                (
+                    current["status"], current["approved_by"], current["approved_at"],
+                    current["rejected_by"], current["rejected_at"], current["reason"], rule_id,
+                ),
+            )
+            self._record_rule_history(
+                connection, rule_id=rule_id, action=action, snapshot=current
+            )
+        return current
+
+    def approve_global_etf_macro_rule(
+        self, rule_id: int, *, approved_by: str = "manual", note: str = ""
+    ) -> dict[str, Any]:
+        """确认：DRAFT → APPROVED。记录 approved_by/approved_at 与审核意见。"""
+        return self._transition_rule(
+            rule_id, to_status="APPROVED", action="approve",
+            actor=approved_by, note=note, allowed_from={"DRAFT"},
+        )
+
+    def reject_global_etf_macro_rule(
+        self, rule_id: int, *, rejected_by: str = "manual", reason: str = ""
+    ) -> dict[str, Any]:
+        """驳回：DRAFT → REJECTED。记录 rejected_by/rejected_at 与驳回原因。"""
+        return self._transition_rule(
+            rule_id, to_status="REJECTED", action="reject",
+            actor=rejected_by, note=reason, allowed_from={"DRAFT"},
+        )
+
+    def revoke_global_etf_macro_rule(
+        self, rule_id: int, *, rejected_by: str = "manual", reason: str = ""
+    ) -> dict[str, Any]:
+        """撤销：APPROVED → REJECTED。废止已批准规则但保留历史评分快照。"""
+        return self._transition_rule(
+            rule_id, to_status="REJECTED", action="revoke",
+            actor=rejected_by, note=reason, allowed_from={"APPROVED"},
+        )
+
+    def reset_global_etf_macro_rule_to_draft(
+        self, rule_id: int, *, rejected_by: str = "manual", note: str = ""
+    ) -> dict[str, Any]:
+        """编辑回提交：REJECTED → DRAFT，重新走审核流程。"""
+        return self._transition_rule(
+            rule_id, to_status="DRAFT", action="reset",
+            actor=rejected_by, note=note, allowed_from={"REJECTED"},
+        )
+
+    def list_global_etf_macro_rule_history(
+        self,
+        rule_id: int | None = None,
+        *,
+        asset_code: str | None = None,
+        macro_state: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """按 rule_id / 资产 / 状态过滤规则历史版本，按变更时间升序返回。"""
+        clauses: list[str] = []
+        values: list[Any] = []
+        if rule_id is not None:
+            clauses.append("rule_id=?")
+            values.append(rule_id)
+        if asset_code:
+            clauses.append("asset_code=?")
+            values.append(asset_code)
+        if macro_state:
+            clauses.append("macro_state=?")
+            values.append(macro_state)
+        query = "SELECT * FROM global_etf_macro_rule_history"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY changed_at, history_id"
+        with self._connect() as connection:
+            return [dict(row) for row in connection.execute(query, values).fetchall()]
 
     def list_global_etf_macro_rules(
         self, *, asset_code: str | None = None, status: str | None = None
@@ -1326,6 +1538,9 @@ class ResearchStore:
 
     _TRADE_MAPPING_STATUS_VALUES = {"ACTIVE", "INACTIVE"}
     _FX_RULE_VALUES = {"static", "manual", "realtime", "estimate"}
+
+    # 宏观规则状态：DRAFT 待审核 → APPROVED 已批准（唯一人工升级动作）；REJECTED 已驳回/撤销。
+    _MACRO_RULE_STATUS_VALUES = {"DRAFT", "APPROVED", "REJECTED"}
 
     def upsert_global_etf_trade_mapping(self, mapping: dict[str, Any]) -> dict[str, Any]:
         """新增或更新研究资产↔交易资产映射。
