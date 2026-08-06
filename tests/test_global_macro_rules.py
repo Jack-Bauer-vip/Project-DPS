@@ -134,7 +134,7 @@ class RuleCandidateTests(unittest.TestCase):
             candidates = build_rule_candidates(_make_condition_frame(), _make_baselines())
             written = write_draft_rules(
                 store, candidates, effective_date="2026-08-03",
-                include_no_data=False, include_reference_only=False,
+                include_baseline=False, include_reference_only=False,
             )
             self.assertEqual(len(written), 12)
             rules = store.list_global_etf_macro_rules()

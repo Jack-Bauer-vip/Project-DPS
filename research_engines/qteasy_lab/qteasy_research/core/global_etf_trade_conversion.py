@@ -174,7 +174,10 @@ def convert_research_score_to_trade(
             "fee_adjustment": 0.0,
             "cost_adjustment": 0.0,
             "fx_note": "",
-            "warnings": ["研究口径 final_score 不可用（如 PARTIAL），交易口径评分无法换算。"],
+            "warnings": [
+                "研究口径 final_score 不可用（如 PARTIAL），交易口径评分无法换算。",
+                *[str(w) for w in (score_row.get("warnings") or [])],
+            ],
         })
         return base
 
@@ -195,6 +198,10 @@ def convert_research_score_to_trade(
         "fx_note": adjustment["fx_note"],
         "trade_final_score": trade_score,
         "status": "CONVERTED",
-        "warnings": adjustment["warnings"],
+        # 透传研究评分的来源警告（如使用临时规则/常态兜底），不掩盖缺失证据。
+        "warnings": [
+            *[str(w) for w in (score_row.get("warnings") or [])],
+            *adjustment["warnings"],
+        ],
     })
     return base

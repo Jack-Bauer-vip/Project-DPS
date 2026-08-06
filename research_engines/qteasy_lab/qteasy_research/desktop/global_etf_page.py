@@ -42,6 +42,7 @@ from qteasy_research.core.global_etf_trade_conversion import convert_research_sc
 from qteasy_research.core.global_etf_trade_fetcher import fetch_trade_asset_info
 from qteasy_research.core.global_etf_trade_mapping import effective_trade_mapping
 from qteasy_research.pretrade.storage import ResearchStore
+from PySide6.QtGui import QBrush, QColor
 
 # 评分表格列中文翻译
 SCORE_COLUMN_LABELS = {
@@ -111,9 +112,29 @@ RULE_ACTION_LABELS = {
     "create": "创建",
     "update": "编辑",
     "approve": "确认",
+    "promote": "设为临时生效",
+    "demote": "取消临时生效",
     "reject": "驳回",
     "revoke": "撤销",
     "reset": "重新提交",
+}
+
+# 规则状态 → 展示颜色（审核区表格着色）
+RULE_STATUS_COLORS = {
+    "APPROVED": "#2e7d32",     # 绿色：已确认
+    "PROVISIONAL": "#ef6c00",  # 橙色：临时生效
+    "BASELINE": "#757575",     # 灰色：常态基准
+    "DRAFT": "#1976d2",        # 蓝色：待审核
+    "REJECTED": "#c62828",     # 红色：已驳回
+}
+
+# 规则状态 → 语义说明（表格 tooltip）
+_RULE_STATUS_HINTS = {
+    "APPROVED": "研究充分且经人工确认，参与评分（最高优先级）",
+    "PROVISIONAL": "样本 24~59 的临时规则，参与评分但仅供参考",
+    "BASELINE": "常态基准（无研究数据），modifier=1.00 直接生效",
+    "DRAFT": "待审核草稿，不参与评分",
+    "REJECTED": "已驳回/撤销，不参与评分",
 }
 
 # 交易资产映射表列中文翻译
@@ -313,16 +334,24 @@ class GlobalEtfPage(QWidget):
         top = QHBoxLayout()
         top.addWidget(QLabel("状态筛选"))
         self.rule_status_filter = QComboBox()
-        self.rule_status_filter.addItems(["全部", "DRAFT", "APPROVED", "REJECTED"])
+        self.rule_status_filter.addItems(["全部", "DRAFT", "PROVISIONAL", "APPROVED", "BASELINE", "REJECTED"])
         self.rule_status_filter.currentTextChanged.connect(lambda _: self._refresh_rules_table())
         top.addWidget(self.rule_status_filter)
         top.addStretch(1)
         self.rule_approve_button = QPushButton("确认")
-        self.rule_approve_button.setToolTip("DRAFT → APPROVED，批准生效")
+        self.rule_approve_button.setToolTip("DRAFT/PROVISIONAL → APPROVED，批准生效")
         self.rule_approve_button.clicked.connect(lambda: self._rule_action("approve"))
         top.addWidget(self.rule_approve_button)
+        self.rule_promote_button = QPushButton("设为临时")
+        self.rule_promote_button.setToolTip("DRAFT → PROVISIONAL，样本不足时临时生效供参考")
+        self.rule_promote_button.clicked.connect(lambda: self._rule_action("promote"))
+        top.addWidget(self.rule_promote_button)
+        self.rule_demote_button = QPushButton("取消临时")
+        self.rule_demote_button.setToolTip("PROVISIONAL → DRAFT，退回待审核")
+        self.rule_demote_button.clicked.connect(lambda: self._rule_action("demote"))
+        top.addWidget(self.rule_demote_button)
         self.rule_reject_button = QPushButton("驳回")
-        self.rule_reject_button.setToolTip("DRAFT → REJECTED，否定该规则")
+        self.rule_reject_button.setToolTip("DRAFT/PROVISIONAL → REJECTED，否定该规则")
         self.rule_reject_button.clicked.connect(lambda: self._rule_action("reject"))
         top.addWidget(self.rule_reject_button)
         self.rule_revoke_button = QPushButton("撤销")
@@ -573,6 +602,16 @@ class GlobalEtfPage(QWidget):
         except Exception:
             rules = []
         self._fill_table(self.rules_table, rules, RULE_COLUMN_LABELS)
+        # 按规则状态给"规则状态"列着色，区分确认/临时/常态/待审/驳回。
+        status_col = list(RULE_COLUMN_LABELS.keys()).index("status")
+        for row_index, rule in enumerate(rules):
+            color = RULE_STATUS_COLORS.get(str(rule.get("status") or ""))
+            if not color:
+                continue
+            item = self.rules_table.item(row_index, status_col)
+            if item is not None:
+                item.setForeground(QBrush(QColor(color)))
+                item.setToolTip(f"规则状态 {rule.get('status')}：{_RULE_STATUS_HINTS.get(rule.get('status'), '')}")
         self._on_rule_selection_changed()
 
     def _selected_rule(self) -> dict[str, Any] | None:
@@ -593,8 +632,10 @@ class GlobalEtfPage(QWidget):
         """按选中规则的当前状态启用/禁用审核按钮。"""
         rule = self._selected_rule()
         status = rule.get("status") if rule else None
-        self.rule_approve_button.setEnabled(status == "DRAFT")
-        self.rule_reject_button.setEnabled(status == "DRAFT")
+        self.rule_approve_button.setEnabled(status in ("DRAFT", "PROVISIONAL"))
+        self.rule_promote_button.setEnabled(status == "DRAFT")
+        self.rule_demote_button.setEnabled(status == "PROVISIONAL")
+        self.rule_reject_button.setEnabled(status in ("DRAFT", "PROVISIONAL"))
         self.rule_revoke_button.setEnabled(status == "APPROVED")
         self.rule_reset_button.setEnabled(status == "REJECTED")
         self.rule_history_button.setEnabled(rule is not None)
@@ -607,6 +648,8 @@ class GlobalEtfPage(QWidget):
             return
         labels = {
             "approve": ("确认规则", f"确认 {rule['asset_code']}/{rule['macro_state']} 为 APPROVED？"),
+            "promote": ("设为临时", f"将 {rule['asset_code']}/{rule['macro_state']} 设为 PROVISIONAL 临时生效（仅供参考）？"),
+            "demote": ("取消临时", f"将 {rule['asset_code']}/{rule['macro_state']} 取消临时生效，退回 DRAFT？"),
             "reject": ("驳回规则", f"驳回 {rule['asset_code']}/{rule['macro_state']}？"),
             "revoke": ("撤销规则", f"撤销已批准的 {rule['asset_code']}/{rule['macro_state']}？"),
             "reset": ("重新提交", f"将 {rule['asset_code']}/{rule['macro_state']} 退回 DRAFT 重新审核？"),
@@ -620,6 +663,10 @@ class GlobalEtfPage(QWidget):
             rule_id = int(rule["rule_id"])
             if action == "approve":
                 store.approve_global_etf_macro_rule(rule_id, approved_by="manual", note=note.strip())
+            elif action == "promote":
+                store.promote_global_etf_macro_rule(rule_id, promoted_by="manual", note=note.strip())
+            elif action == "demote":
+                store.demote_global_etf_macro_rule(rule_id, note=note.strip())
             elif action == "reject":
                 store.reject_global_etf_macro_rule(rule_id, rejected_by="manual", reason=note.strip())
             elif action == "revoke":

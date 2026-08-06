@@ -1428,19 +1428,37 @@ class ResearchStore:
     def approve_global_etf_macro_rule(
         self, rule_id: int, *, approved_by: str = "manual", note: str = ""
     ) -> dict[str, Any]:
-        """确认：DRAFT → APPROVED。记录 approved_by/approved_at 与审核意见。"""
+        """确认：DRAFT 或 PROVISIONAL → APPROVED。记录批准人与审核意见。"""
         return self._transition_rule(
             rule_id, to_status="APPROVED", action="approve",
-            actor=approved_by, note=note, allowed_from={"DRAFT"},
+            actor=approved_by, note=note, allowed_from={"DRAFT", "PROVISIONAL"},
         )
 
     def reject_global_etf_macro_rule(
         self, rule_id: int, *, rejected_by: str = "manual", reason: str = ""
     ) -> dict[str, Any]:
-        """驳回：DRAFT → REJECTED。记录 rejected_by/rejected_at 与驳回原因。"""
+        """驳回：DRAFT 或 PROVISIONAL → REJECTED。记录驳回人与驳回原因。"""
         return self._transition_rule(
             rule_id, to_status="REJECTED", action="reject",
-            actor=rejected_by, note=reason, allowed_from={"DRAFT"},
+            actor=rejected_by, note=reason, allowed_from={"DRAFT", "PROVISIONAL"},
+        )
+
+    def promote_global_etf_macro_rule(
+        self, rule_id: int, *, promoted_by: str = "manual", note: str = ""
+    ) -> dict[str, Any]:
+        """设为临时生效：DRAFT → PROVISIONAL。样本不足但可作参考时使用。"""
+        return self._transition_rule(
+            rule_id, to_status="PROVISIONAL", action="promote",
+            actor=promoted_by, note=note, allowed_from={"DRAFT"},
+        )
+
+    def demote_global_etf_macro_rule(
+        self, rule_id: int, *, rejected_by: str = "manual", note: str = ""
+    ) -> dict[str, Any]:
+        """取消临时生效：PROVISIONAL → DRAFT，退回待审核。"""
+        return self._transition_rule(
+            rule_id, to_status="DRAFT", action="demote",
+            actor=rejected_by, note=note, allowed_from={"PROVISIONAL"},
         )
 
     def revoke_global_etf_macro_rule(
@@ -1523,6 +1541,41 @@ class ResearchStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def get_effective_global_etf_macro_rules(
+        self, *, asset_code: str, macro_states: list[str], target_date: str
+    ) -> list[dict[str, Any]]:
+        """按状态优先级返回每个宏观状态的生效规则。
+
+        优先级：APPROVED > PROVISIONAL > BASELINE。每个状态只返回优先级最高的
+        一条，保证引擎对每个状态能取到唯一 modifier；完全没有规则的状态不会
+        出现在结果中（由引擎判断为阻断评分）。
+
+        该查询替代 get_global_etf_macro_rules 的硬编码 APPROVED，允许临时规则
+        与常态兜底参与评分，同时保留"REJECTED 天然不参与"的安全语义。
+        """
+        if not macro_states:
+            return []
+        placeholders = ",".join("?" for _ in macro_states)
+        priority_placeholders = ",".join("?" for _ in self._MACRO_RULE_STATUS_PRIORITY)
+        values: list[Any] = [asset_code, *macro_states, *self._MACRO_RULE_STATUS_PRIORITY, target_date, target_date]
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM global_etf_macro_rule
+                WHERE asset_code=? AND macro_state IN ({placeholders})
+                  AND status IN ({priority_placeholders})
+                  AND (effective_date IS NULL OR effective_date<=?)
+                  AND (expiry_date IS NULL OR expiry_date>=?)
+                ORDER BY macro_state,
+                  CASE status WHEN 'APPROVED' THEN 0 WHEN 'PROVISIONAL' THEN 1 ELSE 2 END,
+                  rule_id""",
+                values,
+            ).fetchall()
+        chosen: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            if row["macro_state"] not in chosen:
+                chosen[row["macro_state"]] = dict(row)
+        return [chosen[state] for state in macro_states if state in chosen]
+
     def save_global_etf_score_snapshot(self, payload: dict[str, Any]) -> str:
         snapshot_id = payload.get("snapshot_id") or uuid.uuid4().hex
         with self._connect() as connection:
@@ -1539,8 +1592,15 @@ class ResearchStore:
     _TRADE_MAPPING_STATUS_VALUES = {"ACTIVE", "INACTIVE"}
     _FX_RULE_VALUES = {"static", "manual", "realtime", "estimate"}
 
-    # 宏观规则状态：DRAFT 待审核 → APPROVED 已批准（唯一人工升级动作）；REJECTED 已驳回/撤销。
-    _MACRO_RULE_STATUS_VALUES = {"DRAFT", "APPROVED", "REJECTED"}
+    # 宏观规则状态：
+    #   DRAFT        待审核，不参与评分
+    #   PROVISIONAL  临时生效（样本 24~59 的参考值），参与评分但标记"仅供参考"
+    #   APPROVED     人工确认，参与评分（最高优先级）
+    #   BASELINE     常态基准（无研究数据，如期限结构正常），modifier=1.00，直接生效
+    #   REJECTED     已驳回/撤销，不参与评分
+    _MACRO_RULE_STATUS_VALUES = {"DRAFT", "APPROVED", "REJECTED", "PROVISIONAL", "BASELINE"}
+    # 评分时的规则查找优先级：人工确认 > 临时参考 > 常态兜底。
+    _MACRO_RULE_STATUS_PRIORITY = ("APPROVED", "PROVISIONAL", "BASELINE")
 
     def upsert_global_etf_trade_mapping(self, mapping: dict[str, Any]) -> dict[str, Any]:
         """新增或更新研究资产↔交易资产映射。

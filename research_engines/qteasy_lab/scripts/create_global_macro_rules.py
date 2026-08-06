@@ -1,12 +1,22 @@
-"""从条件收益表生成全球 ETF 宏观规则（DRAFT → APPROVED）。
+"""从条件收益表生成全球 ETF 宏观规则（DRAFT/PROVISIONAL → APPROVED）。
 
 用法：
     python scripts/create_global_macro_rules.py --dry-run      # 默认：只打印候选表，不写库
     python scripts/create_global_macro_rules.py --write        # 将候选 DRAFT 写入研究库
-    python scripts/create_global_macro_rules.py --approve      # 将 eligible DRAFT 翻为 APPROVED
+    python scripts/create_global_macro_rules.py --write --promote-provisional
+                                                              # 写入后把样本 24~59 的 DRAFT 提升为 PROVISIONAL
+    python scripts/create_global_macro_rules.py --approve      # 将 eligible 规则翻为 APPROVED
 
-规则只经人工确认后 APPROVED；引擎只读取 status='APPROVED' 的规则。
-无数据状态（期限结构/利率平稳等）默认为保守中性 1.00 且不落库，避免掩盖缺失证据。
+规则状态体系：
+- DRAFT        待审核，不参与评分；
+- PROVISIONAL  样本 24~59 的临时规则，参与评分但标记"仅供参考"；
+- APPROVED     人工确认，参与评分（最高优先级）；
+- BASELINE     常态基准（rate_stable/curve_normal/real_yield_stable 无研究数据），
+               modifier=1.00 直接生效，避免"无数据状态"永久阻断评分链；
+- REJECTED     已驳回/撤销，不参与评分。
+
+curve_inverted（期限结构倒挂）是异常信号而非常态，不生成 BASELINE 兜底：
+数据窗口内未出现倒挂本身就是信息，若未来出现应提醒人工研究而非用 1.00 掩盖。
 每次写入/审核都会在 global_etf_macro_rule_history 留下版本快照（create/update/approve）。
 """
 
@@ -35,25 +45,28 @@ STATE_MAP: dict[str, str] = {
     "实际利率平稳": "real_yield_stable",
 }
 
-# 无条件收益数据的状态（仅在 Notebook 展示为保守中性，默认不落库）
-NO_DATA_STATES = ("rate_stable", "curve_normal", "curve_inverted", "real_yield_stable")
+# 市场常态状态：状态可识别但无条件收益数据。这些是"常态"而非异常事件，
+# 以 BASELINE（modifier=1.00）兜底参与评分，避免阻断整个评分链。
+# 注意 curve_inverted（期限结构倒挂）是异常信号，不在此列，不兜底。
+BASELINE_STATES = ("rate_stable", "curve_normal", "real_yield_stable")
 
 ASSETS = ("SPY", "TLT", "GLD")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="生成全球 ETF 宏观规则（DRAFT/APPROVED）")
+    parser = argparse.ArgumentParser(description="生成全球 ETF 宏观规则（DRAFT/PROVISIONAL/APPROVED）")
     parser.add_argument("--data-dir", type=Path, default=Path("data/processed/global_macro"))
     parser.add_argument("--store-root", type=Path, default=Path("research_store"))
     parser.add_argument("--target-date", default="2026-08-03", help="研究目标日期（固定避免窗口漂移）")
     parser.add_argument("--dry-run", action="store_true", default=True, help="只打印候选表，不写库（默认）")
     parser.add_argument("--write", action="store_true", help="将候选 DRAFT 写入研究库")
-    parser.add_argument("--approve", action="store_true", help="将 eligible DRAFT 翻为 APPROVED")
-    parser.add_argument("--include-no-data-neutral", action="store_true", help="把无数据状态以 1.00 保守中性写入 DRAFT")
+    parser.add_argument("--approve", action="store_true", help="将 eligible 规则翻为 APPROVED")
+    parser.add_argument("--include-baseline", action="store_true", help="为常态状态（rate_stable/curve_normal/real_yield_stable）生成 BASELINE 规则")
+    parser.add_argument("--promote-provisional", action="store_true", help="写入后把样本 24~59 的 DRAFT 批量提升为 PROVISIONAL")
     parser.add_argument("--include-reference-only", action="store_true", help="把样本<24 的行写入 DRAFT（默认跳过）")
     args = parser.parse_args()
     if args.approve and not args.write:
-        # --approve 隐含写库动作，单独执行时也允许（只翻既有 DRAFT，不改候选）
+        # --approve 隐含写库动作，单独执行时也允许（只翻既有规则，不改候选）
         pass
     return args
 
@@ -141,10 +154,14 @@ def write_draft_rules(
     candidates: list[dict[str, Any]],
     *,
     effective_date: str,
-    include_no_data: bool,
+    include_baseline: bool,
     include_reference_only: bool,
 ) -> list[dict[str, Any]]:
-    """把符合条件的数据行写入 DRAFT。样本<24 默认跳过；无数据状态默认不落库。"""
+    """把符合条件的数据行写入 DRAFT。样本<24 默认跳过。
+
+    常态状态（rate_stable/curve_normal/real_yield_stable）在 include_baseline 时
+    生成 BASELINE（modifier=1.00）参与评分，避免"无数据状态"永久阻断评分链。
+    """
     written: list[dict[str, Any]] = []
     skipped: list[str] = []
     for cand in candidates:
@@ -166,9 +183,9 @@ def write_draft_rules(
             "effective_date": effective_date,
         })
         written.append(cand)
-    if include_no_data:
+    if include_baseline:
         for asset in ASSETS:
-            for state in NO_DATA_STATES:
+            for state in BASELINE_STATES:
                 store.upsert_global_etf_macro_rule({
                     "asset_code": asset,
                     "macro_state": state,
@@ -176,34 +193,63 @@ def write_draft_rules(
                     "sample_start": None,
                     "sample_end": None,
                     "sample_count": 0,
-                    "confidence": "insufficient_data",
-                    "status": "DRAFT",
+                    "confidence": "baseline",
+                    "status": "BASELINE",
                     "effective_date": effective_date,
+                    "reason": f"常态基准：{state} 无研究数据，modifier=1.00 直接生效。",
                 })
                 written.append({
                     "asset_code": asset, "macro_state": state, "modifier": 1.00,
-                    "sample_count": 0, "confidence": "insufficient_data",
+                    "sample_count": 0, "confidence": "baseline", "status": "BASELINE",
                 })
     for message in skipped:
         print("跳过：", message)
     return written
 
 
+def promote_provisional_rules(store: ResearchStore) -> list[dict[str, Any]]:
+    """把样本 24~59 的 DRAFT 批量提升为 PROVISIONAL（临时生效供参考）。
+
+    样本不足不代表结论无效，只是未达正式确认门槛；PROVISIONAL 允许其参与
+    评分但带"仅供参考"警告，待样本积累到 60 后可人工确认或升级。
+    """
+    promoted: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    for rule in store.list_global_etf_macro_rules(status="DRAFT"):
+        sample_count = rule.get("sample_count") or 0
+        if 24 <= sample_count < 60:
+            store.promote_global_etf_macro_rule(
+                rule["rule_id"],
+                promoted_by="script",
+                note="样本 24~59，脚本批量提升为临时生效供参考",
+            )
+            promoted.append(rule)
+        elif sample_count >= 60:
+            skipped.append(f"{rule['asset_code']}/{rule['macro_state']}: 样本 {sample_count}>=60，保持 DRAFT 待人工确认")
+    for message in skipped:
+        print("跳过提升 PROVISIONAL：", message)
+    return promoted
+
+
 def approve_eligible_rules(store: ResearchStore) -> list[dict[str, Any]]:
-    """把 eligible DRAFT 翻为 APPROVED：样本>=60 且非中性且非无数据。"""
+    """把 eligible DRAFT/PROVISIONAL 翻为 APPROVED：样本>=60 且非中性且非常态兜底。"""
     approved: list[dict[str, Any]] = []
     rejected: list[str] = []
-    for rule in store.list_global_etf_macro_rules(status="DRAFT"):
+    candidates = [
+        *store.list_global_etf_macro_rules(status="DRAFT"),
+        *store.list_global_etf_macro_rules(status="PROVISIONAL"),
+    ]
+    for rule in candidates:
         sample_count = rule.get("sample_count") or 0
         modifier = float(rule.get("modifier") or 1.0)
         if sample_count < 60:
-            rejected.append(f"{rule['asset_code']}/{rule['macro_state']}: 样本 {sample_count}<60，保持 DRAFT")
+            rejected.append(f"{rule['asset_code']}/{rule['macro_state']}: 样本 {sample_count}<60，保持现状")
             continue
         if modifier == 1.00:
-            rejected.append(f"{rule['asset_code']}/{rule['macro_state']}: 中性 modifier，保持 DRAFT")
+            rejected.append(f"{rule['asset_code']}/{rule['macro_state']}: 中性 modifier，保持现状")
             continue
-        if rule["macro_state"] in NO_DATA_STATES:
-            rejected.append(f"{rule['asset_code']}/{rule['macro_state']}: 无数据保守中性，拒绝 APPROVED")
+        if rule["macro_state"] in BASELINE_STATES:
+            rejected.append(f"{rule['asset_code']}/{rule['macro_state']}: 常态兜底，拒绝 APPROVED")
             continue
         # 走专用审核路径，保证历史表中 action=approve 可审计。
         approved.append(store.approve_global_etf_macro_rule(rule["rule_id"], approved_by="manual"))
@@ -251,10 +297,18 @@ def main() -> int:
         written = write_draft_rules(
             store, candidates,
             effective_date=args.target_date,
-            include_no_data=args.include_no_data_neutral,
+            include_baseline=args.include_baseline,
             include_reference_only=args.include_reference_only,
         )
-        print(f"已写入 DRAFT 规则：{len(written)} 条（effective_date={args.target_date}）")
+        print(f"已写入规则：{len(written)} 条（effective_date={args.target_date}）")
+        for item in written:
+            if item.get("status") == "BASELINE":
+                print(f"  BASELINE {item['asset_code']}/{item['macro_state']}: modifier=1.00")
+        if args.promote_provisional:
+            promoted = promote_provisional_rules(store)
+            print(f"已提升 PROVISIONAL：{len(promoted)} 条")
+            for rule in promoted:
+                print(f"  {rule['asset_code']}/{rule['macro_state']}: 样本={rule['sample_count']}")
         if args.approve:
             approved = approve_eligible_rules(store)
             print(f"已 APPROVED：{len(approved)} 条")

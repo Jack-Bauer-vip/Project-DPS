@@ -284,7 +284,8 @@ class GlobalEtfEngine:
             row["data_quality"] = str(prices.get("quality_level", pd.Series(["C"])).iloc[-1])
             base = self._base_score(asset, prices, macro_series.get(rate_proxy or "DGS30", pd.DataFrame()))
             row.update(base)
-            rules = self.store.get_global_etf_macro_rules(
+            # 生效规则按优先级查找：APPROVED > PROVISIONAL > BASELINE。
+            rules = self.store.get_effective_global_etf_macro_rules(
                 asset_code=asset, macro_states=states, target_date=target_date
             )
             rule_map = {rule["macro_state"]: rule for rule in rules}
@@ -292,14 +293,31 @@ class GlobalEtfEngine:
                 row["warnings"].append("宏观状态不可识别，不能生成宏观修正。")
             elif len(rule_map) != len(states):
                 missing = [state for state in states if state not in rule_map]
-                row["warnings"].append(f"缺少 APPROVED 宏观规则：{', '.join(missing)}。")
-            elif any((rule.get("sample_count") or 0) < self.MIN_RULE_SAMPLE for rule in rules):
+                row["warnings"].append(
+                    f"缺少可生效宏观规则（APPROVED/PROVISIONAL/BASELINE）：{', '.join(missing)}。"
+                )
+            elif any(
+                (rule.get("sample_count") or 0) < self.MIN_RULE_SAMPLE
+                for rule in rules
+                if rule["status"] in ("APPROVED", "PROVISIONAL")
+            ):
+                # BASELINE 是常态定义（样本=0 正常），不参与样本不足检查。
                 row["warnings"].append("宏观规则样本少于 24 个月，仅作参考，不能进入正式修正。")
             else:
                 modifiers = [float(rule["modifier"]) for rule in rules]
                 row["macro_modifier"] = float(np.prod(modifiers))
                 row["macro_support_factors"] = [state for state, rule in rule_map.items() if float(rule["modifier"]) > 1]
                 row["macro_conflict_factors"] = [state for state, rule in rule_map.items() if float(rule["modifier"]) < 1]
+                # 提示非 APPROVED 规则的来源：临时参考或常态兜底，不掩盖缺失证据。
+                for rule in rules:
+                    if rule["status"] == "PROVISIONAL":
+                        row["warnings"].append(
+                            f"{rule['macro_state']} 使用临时规则（样本 {rule.get('sample_count') or 0}<60），仅供参考。"
+                        )
+                    elif rule["status"] == "BASELINE":
+                        row["warnings"].append(
+                            f"{rule['macro_state']} 无研究数据，按常态基准 1.00 处理。"
+                        )
                 if row["base_score"] is not None:
                     row["final_score"] = float(row["base_score"] * row["macro_modifier"])
                     row["status"] = "COMPLETED"
