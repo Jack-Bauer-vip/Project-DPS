@@ -10,6 +10,7 @@ STSong-Light CID 字体，无需外部字体文件。
 
 from __future__ import annotations
 
+import argparse
 import re
 from pathlib import Path
 
@@ -32,8 +33,6 @@ from reportlab.platypus import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SOURCE = PROJECT_ROOT / "docs" / "SYSTEM_MANUAL.md"
-DESTINATION = PROJECT_ROOT / "docs" / "SYSTEM_MANUAL.pdf"
 
 # 注册内置中文 CID 字体（无需字体文件）。
 pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
@@ -199,8 +198,8 @@ def _build_flowables(lines: list[str]) -> list:
     return flow
 
 
-def _build_document() -> None:
-    markdown_text = SOURCE.read_text(encoding="utf-8")
+def _build_document(source: Path, destination: Path, title: str, footer: str) -> None:
+    markdown_text = source.read_text(encoding="utf-8")
     lines = markdown_text.splitlines()
     story = _build_flowables(lines)
 
@@ -208,25 +207,51 @@ def _build_document() -> None:
         canvas.saveState()
         canvas.setFont(CN, 8)
         canvas.setFillColor(MUTED)
-        canvas.drawString(14 * mm, 12 * mm, "Project DPS 投前研究系统 · 功能总结与使用说明书")
+        canvas.drawString(14 * mm, 12 * mm, footer)
         canvas.drawRightString(A4[0] - 14 * mm, 12 * mm, f"第 {doc.page} 页")
         canvas.restoreState()
 
     doc = SimpleDocTemplate(
-        str(DESTINATION),
+        str(destination),
         pagesize=A4,
         leftMargin=16 * mm, rightMargin=16 * mm,
         topMargin=16 * mm, bottomMargin=20 * mm,
-        title="Project DPS 投前研究系统 · 功能总结与使用说明书",
+        title=title,
         author="Project DPS",
     )
     doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
 
 
 def main() -> int:
-    _build_document()
-    size_kb = DESTINATION.stat().st_size / 1024
-    print(f"PDF 已生成：{DESTINATION}")
+    parser = argparse.ArgumentParser(description="把 Markdown 文档编译为中文 PDF（reportlab，无需外部字体）。")
+    parser.add_argument(
+        "--source",
+        default=str(PROJECT_ROOT / "docs" / "SYSTEM_MANUAL.md"),
+        help="Markdown 源文件路径",
+    )
+    parser.add_argument(
+        "--dest",
+        default=str(PROJECT_ROOT / "docs" / "SYSTEM_MANUAL.pdf"),
+        help="PDF 输出路径",
+    )
+    parser.add_argument(
+        "--title",
+        default="Project DPS 投前研究系统 · 功能总结与使用说明书",
+        help="PDF 元数据标题（用于文档属性）",
+    )
+    parser.add_argument(
+        "--footer",
+        default=None,
+        help="页脚显示文本（默认与 --title 相同）",
+    )
+    args = parser.parse_args()
+    source = Path(args.source)
+    destination = Path(args.dest)
+    footer = args.footer or args.title
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    _build_document(source, destination, args.title, footer)
+    size_kb = destination.stat().st_size / 1024
+    print(f"PDF 已生成：{destination}")
     print(f"大小：{size_kb:.1f} KB")
     return 0
 
