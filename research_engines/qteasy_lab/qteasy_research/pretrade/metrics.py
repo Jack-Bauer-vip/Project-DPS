@@ -190,3 +190,30 @@ def analyze_benchmark(asset_frame: pd.DataFrame, benchmark_frame: pd.DataFrame) 
         "tracking_difference": None,
         "tracking_error": None,
     }
+
+
+def rolling_beta(
+    asset_frame: pd.DataFrame,
+    benchmark_frame: pd.DataFrame,
+    windows: tuple[int, ...] = (20, 60, 120, 252),
+) -> dict[str, pd.Series]:
+    """滚动 Beta 薄封装：清洗行情后委托 ``reference.rolling_beta`` 计算。
+
+    纯滚动逻辑在 ``qteasy_research.reference.rolling_beta``（避免两份实现漂移）；
+    本模块在函数体内延迟导入，防止 pretrade 与 reference 模块级循环依赖。
+    返回 ``{window: Series(beta 时间序列)}``；行情缺失或重叠不足时返回空 dict。
+    """
+    from qteasy_research.reference.rolling_beta import (
+        _clean_close,
+        rolling_beta as _core,
+    )
+
+    asset = _clean_close(asset_frame)
+    bench = _clean_close(benchmark_frame)
+    if asset.empty or bench.empty:
+        return {}
+    returns = pd.concat([asset.rename("asset"), bench.rename("benchmark")], axis=1)
+    returns = returns.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+    if len(returns) < 2:
+        return {}
+    return _core(returns["asset"], returns["benchmark"], windows)

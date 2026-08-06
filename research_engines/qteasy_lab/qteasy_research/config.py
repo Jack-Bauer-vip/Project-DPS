@@ -22,6 +22,9 @@ DEFAULT_TRADE_LOG_DIR = PROJECT_ROOT / "logs" / "trades"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "outputs"
 DEFAULT_REPORT_DIR = PROJECT_ROOT / "reports"
 
+# 交易者行为画像（B1-3）输出目录
+TRADER_FINGERPRINT_DIR = DEFAULT_REPORT_DIR / "trader_fingerprint"
+
 
 def get_tushare_token() -> str:
     """从环境变量读取 Tushare Token。"""
