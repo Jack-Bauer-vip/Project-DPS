@@ -1,6 +1,6 @@
 # Project DPS 投前研究系统 · 功能总结与使用说明书
 
-> 版本：2026-08-05 ｜ 分支：`develop` ｜ 全量测试：158 项通过
+> 版本：2026-08-06 ｜ 分支：`develop` ｜ 全量测试：181 项通过（2 跳过）
 
 ---
 
@@ -15,7 +15,7 @@ Project DPS（投前研究系统）是一个面向个人投资者的**投前研�
 | **A 股投前研究（基线）** | AKShare → Tushare → 本地快照 | ETF / 股票 / 指数 | 投前研究报告、因子评分、项目版本 |
 | **全球 ETF 宏观研究（P0–P5）** | FRED + Yahoo Finance | SPY / TLT / GLD | 宏观条件收益、宏观规则、评分换算 |
 
-系统以 **PySide6 桌面端**为主界面，同时提供**命令行（CLI）**与**脚本**作为批处理入口。所有研究结论遵循"确定性程序生成 + 人工确认"的分工：定量指标由程序计算，宏观规则只经人工确认后 APPROVED 生效，**不自动生成交易指令、不自动修改组合权重**。
+系统以 **PySide6 桌面端**为主界面，同时提供**命令行（CLI）**与**脚本**作为批处理入口。所有研究结论遵循"确定性程序生成 + 人工确认"的分工：定量指标由程序计算，宏观规则只经人工确认后 APPROVED 生效（常态状态以 BASELINE 兜底、样本不足以 PROVISIONAL 临时参考并带警告），**不自动生成交易指令、不自动修改组合权重**。
 
 ## 2. 系统架构
 
@@ -46,7 +46,7 @@ data/processed/global_macro（标准化 CSV，2003 起）
 Notebook 条件收益表（月均收益/波动/回撤/胜率）
         │
         ▼
-宏观规则（DRAFT → 人工 APPROVED，五档离散 modifier + 样本联动）
+宏观规则（DRAFT/PROVISIONAL → 人工 APPROVED，常态 BASELINE 兜底，五档离散 modifier + 样本联动）
         │
         ▼
 GlobalEtfEngine → base_score × macro_modifier → 评分快照
@@ -76,11 +76,11 @@ GlobalEtfEngine → base_score × macro_modifier → 评分快照
 
 - **数据恢复与维护**（P0）：FRED 四序列（DGS10 / DGS2 / DGS30 / DFII10，2003 起，质量 A）+ SPY / TLT / GLD（2003 起，质量 B）；支持 FRED 本地 CSV 导入与网络回退，`available_at` 点内时点过滤。
 - **宏观条件收益**（P1）：Notebook 产出各资产在不同宏观状态下的月均收益、波动、最大回撤、胜率，样本全部 ≥24 个月。
-- **宏观规则体系**（P1）：五档离散 modifier（偏差 ±0.5/±1.5pp → 1.15/1.08/1.00/0.92/0.85）+ 样本联动（<24 仅参考 / 24–59 候选 / ≥60 APPROVED）。当前 12 条 DRAFT、5 条 APPROVED（real_yield 状态）。
-- **评分引擎**（P2）：`GlobalEtfEngine` 按宏观状态匹配 APPROVED 规则，`final_score = base_score × macro_modifier`，输出 CSV / JSON 快照。
+- **宏观规则体系**（P1）：五档离散 modifier（偏差 ±0.5/±1.5pp → 1.15/1.08/1.00/0.92/0.85）+ 样本联动（<24 仅参考 / 24–59 临时 PROVISIONAL / ≥60 可 APPROVED）。当前 BASELINE 9 条（常态状态）、PROVISIONAL 6 条（rate_up/rate_down 样本 24~59）、APPROVED 5 条（real_yield 状态）、DRAFT 1 条。
+- **评分引擎**（P2）：`GlobalEtfEngine` 按优先级 APPROVED > PROVISIONAL > BASELINE 匹配每个宏观状态的生效规则，`final_score = base_score × macro_modifier`；常态状态以 BASELINE（modifier=1.00）兜底，某状态完全无规则仍返回 PARTIAL。输出 CSV / JSON 快照。
 - **交易资产映射**（P3）：研究资产 ↔ 交易资产 1:N 映射，含汇率、管理费、交易成本、跟踪误差、折溢价、交易时区/时段/休市风险字段。
-- **交易口径换算**（P4）：相对费用差异 + 一次性交易成本折减，把研究评分换算为交易口径独立参考值；汇率不调整收益仅展示敞口提示。
-- **规则审核与版本**（P5）：`global_etf_macro_rule_history` 历史版本链；审核状态机 approve / reject / revoke / reset，新增 REJECTED 状态；驳回/撤销保留审计记录。
+- **交易口径换算**（P4）：相对费用差异 + 一次性交易成本折减，把研究评分换算为交易口径独立参考值；汇率不调整收益仅展示敞口提示；研究评分来源警告（临时/常态兜底）透传到换算表 tooltip。
+- **规则审核与版本**（P5）：`global_etf_macro_rule_history` 历史版本链；审核状态机 approve / reject / revoke / reset / promote / demote，规则状态含 DRAFT / PROVISIONAL / APPROVED / BASELINE / REJECTED；驳回/撤销保留审计记录。
 
 ### 3.3 桌面端工作台（7 个页面）
 
@@ -118,8 +118,8 @@ GlobalEtfEngine → base_score × macro_modifier → 评分快照
 
 - 不自动修改正式资产池、不自动调整组合权重、不自动生成交易指令。
 - 不覆盖历史报告、数据快照或冻结结论。
-- 宏观修正系数必须人工确认；无 APPROVED 规则时 `final_score` 为 null。
-- 无数据状态保守中性 1.00 且不落库；`rate_up`/`rate_down` 样本 <60 不破例 APPROVED（约 2027 年复核）。
+- 宏观修正系数必须人工确认；生效规则按 APPROVED > PROVISIONAL > BASELINE 优先级查找，某状态完全无规则时 `final_score` 为 null（不把缺失当作中性）。
+- 常态状态（`rate_stable`/`curve_normal`/`real_yield_stable`）以 BASELINE（modifier=1.00）落库并参与评分；样本 24~59 可提升为 PROVISIONAL 临时生效，待样本积累到 60（约 2027 年）复核升级 APPROVED；`curve_inverted`（期限结构倒挂）属异常信号不兜底。
 - API Key / Token 只通过环境变量读取，不入库不入 Git。
 
 ---
@@ -230,10 +230,10 @@ cd "D:\Project DPS\research_engines\qteasy_lab"
 自上而下六个区：
 
 1. **数据状态与当前宏观状态**：各序列截至日期与质量等级、利率代理（DGS30，缺失时 DGS10 降级并警告）、引擎状态、各资产宏观状态枚举。
-2. **宏观规则状态**：状态筛选（全部 / DRAFT / APPROVED / REJECTED）；选中规则后可用 **确认**（DRAFT→APPROVED）、**驳回**（DRAFT→REJECTED）、**撤销**（APPROVED→REJECTED）、**重新提交**（REJECTED→DRAFT）、**历史**（查看版本链）。每次动作可填写审核意见。
+2. **宏观规则状态**：状态筛选（全部 / DRAFT / PROVISIONAL / APPROVED / BASELINE / REJECTED），规则状态列按色区分（APPROVED 绿 / PROVISIONAL 橙 / BASELINE 灰 / DRAFT 蓝 / REJECTED 红）；选中规则后可用 **确认**（DRAFT/PROVISIONAL→APPROVED）、**设为临时**（DRAFT→PROVISIONAL，样本 24~59 临时生效）、**取消临时**（PROVISIONAL→DRAFT）、**驳回**（DRAFT/PROVISIONAL→REJECTED）、**撤销**（APPROVED→REJECTED）、**重新提交**（REJECTED→DRAFT）、**历史**（查看版本链）。每次动作可填写审核意见。
 3. **SPY/TLT/GLD 宏观匹配评分**：基础评分、宏观修正、最终评分、支持/冲突因子、样本数；"重新计算"以目标日期生成评分并落快照。
 4. **条件收益表**：展示 Notebook 产出的条件收益（月均收益 / 波动 / 最大回撤 / 胜率）。
-5. **交易口径换算**：对最近一次评分，取每个研究资产的生效映射换算为交易口径评分（费用差异 + 成本折减），独立参考，不改动研究评分。
+5. **交易口径换算**：对最近一次评分，取每个研究资产的生效映射换算为交易口径评分（费用差异 + 成本折减），独立参考，不改动研究评分；研究评分来源警告（如"使用临时规则/按常态基准"）与汇率说明悬停行可见。
 6. **交易资产映射**：选择研究资产 → 映射表格 + 表单。字段含交易资产代码/名称、币种、汇率方式/汇率、管理费、交易成本、跟踪误差、折溢价、优先级；支持保存 / 停用 / 删除，表格提示当前生效映射（ACTIVE + 最小 priority）。
 
 **自动抓取**：在"交易资产代码"输入代码后按回车或失焦，自动抓取并回填**名称、管理费、折溢价、跟踪误差**（也可点"自动抓取"按钮）：
@@ -349,14 +349,22 @@ cd "D:\Project DPS\research_engines\qteasy_lab"
 # 查看候选规则（不写库）
 .venv\Scripts\python.exe scripts/create_global_macro_rules.py --dry-run
 
-# 写入 DRAFT 规则
+# 写入 DRAFT 规则（--include-baseline 同时为常态状态生成 BASELINE）
 .venv\Scripts\python.exe scripts/create_global_macro_rules.py --write
+.venv\Scripts\python.exe scripts/create_global_macro_rules.py --write --include-baseline
 
-# 将 eligible DRAFT 翻为 APPROVED
+# 写入后把样本 24~59 的 DRAFT 批量提升为 PROVISIONAL
+.venv\Scripts\python.exe scripts/create_global_macro_rules.py --write --promote-provisional
+
+# 将 eligible DRAFT/PROVISIONAL 翻为 APPROVED
 .venv\Scripts\python.exe scripts/create_global_macro_rules.py --approve
+
+# 幂等迁移：补齐常态 BASELINE 并批量提升样本 24~59 的 DRAFT（--dry-run 预览 / --apply 执行）
+.venv\Scripts\python.exe scripts/migrate_rule_status.py --dry-run
+.venv\Scripts\python.exe scripts/migrate_rule_status.py --apply
 ```
 
-> 规则只经人工确认后 APPROVED；引擎只读取 APPROVED 规则。样本 <60 的利率状态规则保持 DRAFT。
+> 生效规则按优先级 APPROVED > PROVISIONAL > BASELINE 参与评分；样本 <60 的规则以 PROVISIONAL 临时生效（仅供参考），样本满 60 后由人工确认升级 APPROVED。
 
 ## 8. 数据维护
 
@@ -371,11 +379,14 @@ cd "D:\Project DPS\research_engines\qteasy_lab"
 # 2. 运行条件收益 Notebook（生成 condition_returns.csv）
 #    notebooks/global_macro_lab.ipynb
 
-# 3. 生成候选规则并审阅
+# 3. 生成候选规则并审阅（--include-baseline 补常态 BASELINE，--promote-provisional 提升样本不足规则）
 .venv\Scripts\python.exe scripts/create_global_macro_rules.py --dry-run
-.venv\Scripts\python.exe scripts/create_global_macro_rules.py --write
+.venv\Scripts\python.exe scripts/create_global_macro_rules.py --write --include-baseline --promote-provisional
 
-# 4. 在桌面端"全球ETF宏观"页人工确认/驳回/撤销规则
+# 4. 幂等迁移兜底（可选：补齐常态 BASELINE / 批量提升样本 24~59 为 PROVISIONAL）
+.venv\Scripts\python.exe scripts/migrate_rule_status.py --apply
+
+# 5. 在桌面端"全球ETF宏观"页人工确认/驳回/撤销规则（样本满 60 可"确认"升级 APPROVED）
 ```
 
 ### 8.2 生成因子数据
@@ -404,11 +415,11 @@ cd "D:\Project DPS\research_engines\qteasy_lab"
 当前结果：
 
 ```text
-Ran 158 tests
-OK
+Ran 181 tests
+OK (skipped=2)
 ```
 
-覆盖：GlobalEtfEngine fixture（5）、FRED 本地导入（15）、宏观规则（15）、映射（19）、交易换算（19）、规则审核状态机（15）、桌面端页面/映射/审核 UI（15）等。
+覆盖：GlobalEtfEngine fixture（5）、FRED 本地导入（15）、宏观规则（15）、映射（19）、交易换算（19）、规则审核状态机（15）、桌面端页面/映射/审核 UI（15）、规则状态体系 BASELINE/PROVISIONAL（6）等。
 
 > 若从上级目录执行出现 `ModuleNotFoundError: No module named 'qteasy_research'`，表示未把 `qteasy_lab` 加入模块路径，请改用上述从 `qteasy_lab` 目录执行的命令。
 
@@ -418,7 +429,9 @@ OK
 安装桌面依赖：`.venv\Scripts\pip install PySide6`，然后用 `启动投前研究桌面版.bat` 启动。
 
 **Q2：全球ETF宏观页显示"引擎返回 PARTIAL"？**
-属预期安全行为。当前宏观状态三元组 `rate_up + curve_normal + real_yield_up` 中，`rate_up` 样本 <60（DRAFT）、`curve_normal` 无数据（不落库），缺 APPROVED 规则时 `macro_modifier`/`final_score` 为空。等样本积累到 60（约 2027 年）复核后可能转为 COMPLETED。
+可能原因与处理：
+- **已按状态体系兜底**：常态状态（`curve_normal` 等）以 BASELINE（modifier=1.00）参与评分，样本不足状态（`rate_up` 样本 <60）可提升为 PROVISIONAL 临时生效，三者组合后 `macro_modifier`/`final_score` 可正常计算，评分显示 COMPLETED，并附"使用临时规则/按常态基准"警告提示数据缺口。
+- **仍显示 PARTIAL**：某宏观状态完全没有规则（如异常状态 `curve_inverted` 无 BASELINE 兜底）。此时 `macro_modifier`/`final_score` 为空属安全行为，不把缺失当作中性；可为该状态补 APPROVED 规则或在桌面端审核区处理。
 
 **Q3：如何配置 FRED / Tushare 数据？**
 通过环境变量设置 `FRED_API_KEY` 与 `TUSHARE_TOKEN`（不入库）。FRED 也可手动下载 CSV 放 `data/raw/global_macro/`，用 `fetch_global_macro_data.py --local-only` 离线导入。
