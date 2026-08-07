@@ -18,6 +18,16 @@ from qteasy_research.reference.duration_phase import build_duration_phase
 from qteasy_research.reference.grid_reference import build_grid_reference
 from qteasy_research.reference.red_flag import assess_red_flags, load_risk_thresholds
 from qteasy_research.reference.hedge_efficiency import build_hedge_efficiency
+from qteasy_research.reference.human_machine_compare import (
+    b_signal,
+    build_hmc_report,
+    classify_direction,
+    monthly_returns_from_prices,
+    parse_human_override_log,
+    post_intervention_performance,
+    render_hmc_markdown,
+    weight_delta,
+)
 from qteasy_research.reference.metadata import (
     build_header,
     embed_header_csv,
@@ -61,6 +71,10 @@ __all__ = [
     "build_grid_reference",
     # hedge_efficiency（B1-2）
     "build_hedge_efficiency",
+    # human_machine_compare（人机对比月报）
+    "b_signal", "build_hmc_report", "classify_direction", "monthly_returns_from_prices",
+    "parse_human_override_log", "post_intervention_performance", "render_hmc_markdown",
+    "weight_delta",
     # metadata
     "build_header", "embed_header_csv", "embed_header_any", "now_iso",
     "parse_header_csv", "today_iso", "validate_freshness", "write_parquet_with_meta",

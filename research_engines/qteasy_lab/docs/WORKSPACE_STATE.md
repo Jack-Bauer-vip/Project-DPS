@@ -48,6 +48,19 @@
 basis}}`，5 情景：rate_up_50bp / rate_down_50bp / curve_inverted / real_yield_up /
 stagnation（滞胀，rate_up AND real_yield_up 组合））。仅 `--include-stress` 时产出。
 
+## human_machine_compare 编码（2026-08-07 提前，基于合成数据）
+
+| 模块 | 文件 |
+|---|---|
+| 分析引擎 | `reference/human_machine_compare.py`（parse_human_override_log / b_signal / classify_direction / weight_delta / post_intervention_performance / build_hmc_report / render_hmc_markdown） |
+| CLI | `scripts/run_human_machine_compare.py`（`--target-month` / `--human-log` / `--package` / `--no-online`） |
+| 合成数据 | `tests/fixtures/human_override_log_synthetic.csv`（72 行，3 策略 × 4 资产 × 4 月）+ `_generate_fixtures.py` |
+| 测试 | `tests/test_human_machine_compare.py`（31 个：解析/B信号/方向分类/干预后收益/全链路/无中文策略名） |
+
+- 真实数据联调通过：真实 human_log（4 行）+ 最新决策包 → 报告骨架正确（一致 2 / 背离 2）。
+- 口径调整：「macro_stress 无显著压力」= 不看空（非看多）；信号矛盾 → neutral，不硬判。
+- reports 产物 `reports/human_machine_compare/{YYYY-MM}_hmc.md` 不入库（gitignore）。
+
 ## 冒烟结果（2026-08-07）
 
 1. `run_reference_pipeline.py --dry-run --include-stress`：四件套落盘 `outputs/`，warnings=0；
@@ -79,8 +92,7 @@ stagnation（滞胀，rate_up AND real_yield_up 组合））。仅 `--include-st
 
 ## 下一步
 
-- `human_machine_compare`（人机对比月报）：依赖 A 侧 `human_override_log` 积累 **≥3 个月**
-  后再启动（当前仅 4 行）。**前期设计已固化**：`docs/human_machine_compare_design.md`
-  （输出格式 / 口径 / 数据源映射 / 依赖清单 / 监控清单），2026-11 立项时直接参考。
+- `human_machine_compare` **真实月报**：触发条件 `human_override_log` 达 **≥30 条且覆盖 ≥3 策略**
+  （约 2026-11 后评估）→ 直接运行 CLI 产出，无需再编码（分析引擎已提前落地）。
 - 联调已通过（2026-08-07）：A 已消费 `systemB_ref/20260807/` 并回执 SUCCESS；
   等待 A 侧 `read_with_audit()` 生产接线 + 审核工作台设计。

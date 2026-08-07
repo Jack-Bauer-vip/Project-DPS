@@ -10,7 +10,7 @@
 | 阶段一（M2） | B1-1 网格参考表 / B1-2 宏观对冲效率 / B1-3 交易指纹 / 端到端管线 / 接口契约 | ✅ 已完成（提交 fe48091） |
 | 阶段二（M3） | 宏观持续期 duration_phase + 逐资产 red_flag + 版本回滚启用 | ✅ 已完成（提交 0ac463a） |
 | 阶段三（M3） | stress_simulator + param_sweep | ✅ 已完成（提交 d30cd72，验收通过） |
-| 阶段三（延后项） | human_machine_compare（人机对比月报） | ⏳ 延后至 2026 年 11 月后评估 |
+| human_machine_compare（人机对比月报） | 分析引擎 + 报告生成器 | ✅ 已编码（2026-08-07，基于合成数据）；真实月报待 human_override_log 积累 |
 
 **全量测试：300 tests OK（skipped=2）**（阶段二 277 + 阶段三新增 23）。
 
@@ -69,9 +69,27 @@
 - **B 严禁**修改 `systemA_feedback/` 中的任何文件。
 - 机器产出全 ASCII，零中文策略名；`approval_policy="REFERENCE_ONLY"` 永不自动 APPROVED。
 
+## human_machine_compare 编码（2026-08-07 提前，基于合成数据）
+
+设计文档（`docs/human_machine_compare_design.md`）的前期设计已按用户裁定提前落地为代码：
+
+| 产出物 | 文件 | 说明 |
+|---|---|---|
+| 分析引擎 | `reference/human_machine_compare.py` | 解析 / B 信号三态 / 方向一致性三分类 / 偏离度量 / 干预后收益 / 聚合 / Markdown 渲染 |
+| CLI | `scripts/run_human_machine_compare.py` | 只写 `reports/human_machine_compare/{YYYY-MM}_hmc.md`，离线不写共享目录 |
+| 合成数据 | `tests/fixtures/human_override_log_synthetic.csv`（72 行） | 3 策略 × 4 资产 × 4 月，覆盖 agree/diverge/neutral |
+| 测试 | `tests/test_human_machine_compare.py`（31 个） | 全链路 + 无中文策略名断言 |
+
+- **真实数据联调已验证**（2026-08-07）：真实 `human_override_log.csv`（4 行）+ 最新决策包跑通，
+  一致 2 / 背离 2 / 中性 0，报告骨架正确；干预后表现正确降级（8 月干预次月 9 月行情未发生）。
+- **全量测试 331 tests OK（skipped=2）**（300 + 新增 31）。
+- 口径调整（相对设计文档 §3.3）：「macro_stress 无显著压力」是**不看空**而非看多，避免无压力资产
+  全部看多、一致率虚高；信号矛盾（多空同时触发）→ neutral 不硬判。
+
 ## 下一步
 
 - **联调（M3）已通过**（2026-08-07）：A 已消费 `systemB_ref/20260807/` 并回执 SUCCESS；
   A 侧下一步 `read_with_audit()` 接入生产（日更/状态页）+ 审核工作台设计。
-- **human_machine_compare**：等 A 侧 `human_override_log` 积累 ≥3 个月（2026 年 11 月后评估）。
-  前期设计已固化：`docs/human_machine_compare_design.md`（输出格式/口径/数据源映射/依赖清单/监控清单）。
+- **human_machine_compare 真实月报**：触发条件 `human_override_log` 达 **≥30 条且覆盖 ≥3 策略**
+  （约 2026-11 后评估）→ 直接运行 `scripts/run_human_machine_compare.py --target-month YYYY-MM
+  --package <决策包>` 产出真实月报；分析引擎已就绪，无需再编码。
