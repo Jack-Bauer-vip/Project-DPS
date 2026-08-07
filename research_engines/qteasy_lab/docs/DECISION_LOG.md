@@ -113,6 +113,33 @@
 - **阶段二完成后通知 A 侧**：决策包新增 `macro_regime.phase` 与 `asset.red_flag` 字段（A
   `integration_reader.py` 读完整 JSON 自动带入，无需改动；风控预警展示逻辑由 A 审核工作台单独设计）。
 
+## 阶段三（M3）决策（2026-08-07 记录）
+
+背景：阶段二验收通过后启动阶段三。按 PROJECT_AUDIT 6.2 剩余模块，用户裁决**只做 2 项**：
+`stress_simulator`（压力测试损益）+ `param_sweep`（间距网格扫描 + 换手/成本评估）；
+`human_machine_compare` 延后（依赖 `human_override_log` 积累 ≥3 个月，当前仅 2 行）。
+
+- **stress_simulator 历史回放**：不假设模型、不虚拟压力路径——筛历史上真实发生压力情景的
+  月份（`scenario_monthly_returns`），算资产在这些月份的真实月均收益与对利率代理的条件相关，
+  填充 `schema.AssetDimensions.macro_stress`（字段已定义，阶段三首次有值）。
+- **5 情景**：`rate_up_50bp`（DGS30 月绝对差 ≥ +0.50，50bp 强加息，严于 rate_up 的 +20bp）、
+  `rate_down_50bp`（≤ -0.50）、`curve_inverted`（states）、`real_yield_up`（states，DFII10）、
+  `stagnation`（滞胀：rate_up **且** real_yield_up 组合，本项目首次引入的组合压力情景）。
+- **口径**：压力幅度阈值（±50bp）是利率**绝对变化**，须用 `diff()`（`_macro_abs_change`），
+  与 `_macro_state` rate_up 判定（绝对差 ≥+0.20）一致；rate_up 用 `≥`、rate_down 用 `≤`
+  （初版两者都用 `>=` 导致 rate_down 误匹配非压力月，测试暴露后修复）。
+- **降级链**：空行情/空宏观表 → 不产出；情景无匹配月份 → `sample_count=0` + None + low；
+  `sample_count < STRESS_MIN_SAMPLES(=5)` → 数值 None + low（与 hedge_efficiency 对齐，
+  不虚构压力损益）。真实数据强加息 ≥50bp 月稀少（样本 2~3），多数资产该情景降级 low 属常态。
+- **param_sweep 独立 CLI**：离线研究工具（`scripts/run_param_sweep.py`），**不进每日决策包**、
+  A 侧无对应消费端；网格间距 = 基准 × multipliers，基准缺省从 60 日年化波动率推导
+  （复用 `suggest_reference_spread`）；成本模型独立镜像 `TransactionCostConfig`
+  （`2×(commission+half_spread)+stamp_tax+impact`，ETF 免印花税，不反向 import pretrade）。
+- **pipeline 集成**：`include_stress` 从阶段二占位（True 仅 warning）改为真实现，默认 False
+  零开销（`macro_stress` 保持空 dict，A 侧尚未消费该字段）；计算失败降级 warning 不崩溃。
+- **CLI 参数**：`run_reference_pipeline.py` 新增 `--include-stress`；`run_param_sweep.py` 默认
+  `--no-online`（离线研究，行情缺失不联网补齐）。
+
 ## 安全边界
 
 - 不自动修改正式资产池。

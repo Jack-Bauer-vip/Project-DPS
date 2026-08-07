@@ -1,13 +1,13 @@
 # 工作区状态快照
 
-> 保存于：2026-08-07 ｜ 阶段一（M2）已完成；阶段二（M3）已完成并提交。
+> 保存于：2026-08-07 ｜ 阶段一（M2）已完成；阶段二（M3）已完成；阶段三（M3）已完成。
 
 ## 当前里程碑
 
-- **阶段二（M3）已完成并提交**：宏观状态持续期（duration_phase）+ 逐资产红/橙/黄风控旗
-  （red_flag）+ 版本回滚启用（rollback_to + backup 修剪）。
-- **全量测试 277 tests OK（skipped=2）**（阶段一 243 + 阶段二新增 34）。
-- **git 状态**：`develop` 分支，阶段二已提交（feat: 阶段二…）。
+- **阶段三（M3）已完成**：压力模拟器（stress_simulator，填充 `macro_stress`）+
+  参数网格扫描（param_sweep，独立 CLI）。
+- **全量测试 300 tests OK（skipped=2）**（阶段二 277 + 阶段三新增 23）。
+- **git 状态**：`develop` 分支，阶段二已提交（0ac463a），阶段三待提交。
 
 ## 阶段一产出物（均已入库）
 
@@ -34,16 +34,30 @@
 阶段二新字段：`macro_regime.phase / phase_basis / phase_confidence / state_durations` +
 `asset.red_flag`（level/triggered_by/approval_required/metrics）。A 读端读完整 JSON 自动带入。
 
+## 阶段三产出物（均已入库）
+
+| 模块 | 文件 |
+|---|---|
+| 压力模拟器 | `reference/stress_simulator.py`（build_stress_simulator → 5 情景压力损益） |
+| 参数网格扫描 | `reference/param_sweep.py`（sweep_spread_grid + round_trip_cost_bps）+ `scripts/run_param_sweep.py` |
+| 管线集成 | `reference/pipeline.py`（include_stress 真实现，默认 False 零开销） |
+| 情景幅度常量 | `reference/config.py`（STRESS_RATE_UP_BP=0.50 / STRESS_RATE_DOWN_BP=-0.50 / STRESS_REAL_YIELD_UP_BP=0.10 / STRESS_MIN_SAMPLES=5） |
+| 测试 | `tests/test_stress_simulator.py` / `test_param_sweep.py` / `test_reference_pipeline.py` |
+
+阶段三新字段：`asset.macro_stress`（`{scenario: {pnl_pct, sample_count, corr, confidence,
+basis}}`，5 情景：rate_up_50bp / rate_down_50bp / curve_inverted / real_yield_up /
+stagnation（滞胀，rate_up AND real_yield_up 组合））。仅 `--include-stress` 时产出。
+
 ## 冒烟结果（2026-08-07）
 
-1. `run_reference_pipeline.py --dry-run`：四件套落盘 `outputs/`，warnings=0。
-2. **决策包新字段**：`macro_regime.phase=early`（basis=rate_up，conf=low，真实数据 rate_up 刚起 1 月）；
-   14 只资产中 8 只带 `red_flag`（red/orange/yellow 各档），全部 `approval_required=true`，
-   全 ASCII 零中文策略名。
-3. **回滚联调**：真实写 → 篡改 `decision_ref_package.json` 数值字段（非删 .ready）→
-   `rollback_to` → 数值恢复、`verify_run ok=True`。
-4. 修复 `hedge_efficiency._scenario_row` 对 NaN states 的潜在崩溃（资产月份超出场景表范围时
-   `scenario in float` 抛 TypeError），作防御性修复入库。
+1. `run_reference_pipeline.py --dry-run --include-stress`：四件套落盘 `outputs/`，warnings=0；
+   14 只资产全部带 `macro_stress`。真实数据 `rate_up_50bp` 样本 3 / `rate_down_50bp` 样本 2
+   （<5）→ 正确降级 None + confidence=low（不虚构压力损益）；`curve_inverted` 25 样本、
+   `real_yield_up` 25~28 样本、`stagnation` 15~16 样本 → high。全 ASCII 零中文策略名。
+2. `scripts/run_param_sweep.py --no-online`：`reports/param_sweep/param_sweep_20260807.csv`
+   + `.md` 落盘；14 资产 × 6 乘子 = 84 行，0 缺失；间距越小触发越多、成本越高（单调），
+   CSV 全 ASCII，中文名只进 Markdown 摘要。
+3. **回归**：`include_stress=False`（默认）决策包 `macro_stress` 保持空 dict，零开销。
 
 ## 关键现状
 
@@ -51,7 +65,10 @@
   `--real` 待 A 建目录后启用；`run_reference_pipeline --real` 进入前显式 `ensure_root()` 兜底。
 - A 侧 `asset_pool.csv` active 14 只，全部本地行情覆盖（含 164824.SZ）。
 - A 侧 `strategy_params.json` 存在，`risk_thresholds` 已实际用于 dry-run 风控旗判定。
-- 待办：**通知 A 侧**决策包新增 `macro_regime.phase` 与 `asset.red_flag` 字段（供审核工作台设计）。
+- param_sweep 为 B 侧**离线研究工具**：只写 B 本地 `reports/param_sweep/`，不进每日决策包、
+  不写共享目录、A 侧无对应消费端（如需 A 消费可另约输出位置）。
+- 待办：**通知 A 侧**决策包新增 `asset.macro_stress` 字段（仅 `--include-stress` 时产出；
+  强加息 ≥50bp 月真实样本稀少，多数资产该情景会降级 low）。
 
 ## 硬约束（不可违反）
 
@@ -60,7 +77,8 @@
 - 非 dry-run 写入前显式调 `IntegrationDir.ensure_root()`（创建根目录 + WARNING，不崩溃）。
 - 全量测试命令：`cd research_engines/qteasy_lab && .venv/Scripts/python.exe -B -m unittest discover -s "D:\Project DPS\tests" -q`
 
-## 下一步（阶段三另行立项）
+## 下一步
 
-PROJECT_AUDIT 6.2 剩余模块：压力模拟器（pipeline 已留 `include_stress=False` 占位）、
-参数网格扫描、人机对比月报（依赖 human_override_log 累积至少 3 个月）。
+- `human_machine_compare`（人机对比月报）：依赖 A 侧 `human_override_log` 积累 **≥3 个月**
+  后再启动（当前已存在但仅 2 行）。
+- 与 A 联调：A 建共享目录后跑 `--real` 真实写入 → A 侧确认可读回写 consumed。

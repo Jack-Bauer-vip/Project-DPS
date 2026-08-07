@@ -38,6 +38,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--asset-pool", type=Path, default=SYSTEM_A_ASSET_POOL, help="系统A asset_pool.csv")
     parser.add_argument("--output-root", type=Path, default=OUTPUTS_DIR,
                         help="dry-run 输出目录（默认 outputs/）")
+    parser.add_argument("--include-stress", dest="include_stress", action="store_true",
+                        help="计算宏观压力情景损益并填充 macro_stress（默认不计算）")
     return parser.parse_args()
 
 
@@ -48,6 +50,7 @@ def main(args: argparse.Namespace) -> dict:
             data_root=args.data_root,
             asset_pool=args.asset_pool,
             output_root=args.output_root,
+            include_stress=args.include_stress,
         )
         print(f"[dry-run] 三件套写入：{record['output_root']}")
         for filename in record["files"]:

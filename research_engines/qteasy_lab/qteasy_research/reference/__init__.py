@@ -28,6 +28,7 @@ from qteasy_research.reference.metadata import (
     validate_freshness,
     write_parquet_with_meta,
 )
+from qteasy_research.reference.param_sweep import round_trip_cost_bps, sweep_spread_grid
 from qteasy_research.reference.pipeline import run_pipeline
 from qteasy_research.reference.rolling_beta import (
     multi_benchmark_beta,
@@ -43,6 +44,7 @@ from qteasy_research.reference.trader_fingerprint import (
     analyze_trader_fingerprint,
     render_fingerprint_markdown,
 )
+from qteasy_research.reference.stress_simulator import build_stress_simulator
 from qteasy_research.reference.volatility_cone import (
     build_volatility_cone,
     current_vol_rank,
@@ -62,6 +64,8 @@ __all__ = [
     # metadata
     "build_header", "embed_header_csv", "embed_header_any", "now_iso",
     "parse_header_csv", "today_iso", "validate_freshness", "write_parquet_with_meta",
+    # param_sweep（阶段三）
+    "round_trip_cost_bps", "sweep_spread_grid",
     # pipeline
     "run_pipeline",
     # red_flag（阶段二）
@@ -72,6 +76,8 @@ __all__ = [
     "AssetDimensions", "DecisionRefPackage",
     # shared_dir
     "IntegrationDir", "IntegrationDirMissing",
+    # stress_simulator（阶段三）
+    "build_stress_simulator",
     # trader_fingerprint（B1-3）
     "analyze_trader_fingerprint", "render_fingerprint_markdown",
     # volatility_cone

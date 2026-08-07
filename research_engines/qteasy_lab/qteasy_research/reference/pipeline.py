@@ -36,6 +36,7 @@ from qteasy_research.reference.metadata import build_header, embed_header_any, t
 from qteasy_research.reference.rolling_beta import multi_benchmark_beta
 from qteasy_research.reference.schema import AssetDimensions, DecisionRefPackage
 from qteasy_research.reference.shared_dir import IntegrationDir
+from qteasy_research.reference.stress_simulator import build_stress_simulator
 from qteasy_research.reference.volatility_cone import (
     build_volatility_cone,
     current_vol_rank,
@@ -187,8 +188,9 @@ def run_pipeline(
             ``macro_regime``）；macro_table 为空时不并入任何键。
         include_red_flag: 是否逐资产评估红/橙/黄风控旗（读取系统A
             ``risk_thresholds`` 阈值；阈值缺失降级为无风险 + warning）。
-        include_stress: 阶段三占位开关。True 仅追加 warning 提示未实现，
-            不执行任何压力模拟逻辑。
+        include_stress: 是否计算宏观压力情景损益（``build_stress_simulator``）
+            并填充各资产 ``macro_stress``。默认 False（A 侧尚未消费该字段，
+            零开销）；计算失败降级为 warning，不崩溃。
         risk_params: 系统A ``strategy_params.json`` 路径（默认 ``config``
             常量）；测试注入临时 fixture 用，避免读到真实 A 配置。
         output_root: 非 None 时走 dry-run：三件套写到该目录（不写共享目录、
@@ -210,10 +212,6 @@ def run_pipeline(
     # dry-run 用隔离的 IntegrationDir(output_root) 写心跳，证明链路在线但不碰真实共享目录。
     sink = IntegrationDir(output_root) if dry_run else integration
 
-    if include_stress:
-        warnings.append(
-            "include_stress 为阶段三占位开关：压力模拟尚未实现，本次忽略该请求。"
-        )
     sink.write_heartbeat(status="running")
     try:
         assets = read_active_assets(asset_pool)
@@ -267,6 +265,18 @@ def run_pipeline(
             flags = assess_red_flags(assets, aligned, thresholds)
             for dim in dimensions:
                 dim.red_flag = flags.get(dim.asset_id)
+
+        # 阶段三：宏观压力情景损益（include_stress=True 时填充 macro_stress）。
+        # 默认 False 零开销；宏观表为空 / 宏观序列缺失时各情景 sample_count=0
+        # 不虚构；计算失败降级为 warning，不崩溃。
+        if include_stress:
+            try:
+                stress_map = build_stress_simulator(assets, aligned, macro_table, data_root_path)
+            except Exception as exc:
+                warnings.append(f"压力模拟失败：{type(exc).__name__}: {exc}")
+                stress_map = {}
+            for dim in dimensions:
+                dim.macro_stress = stress_map.get(dim.asset_id, {})
 
         package = DecisionRefPackage(
             generated_date=generated_date,

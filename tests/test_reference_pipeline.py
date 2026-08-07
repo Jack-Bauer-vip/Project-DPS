@@ -89,6 +89,28 @@ class ReferencePipelineTests(unittest.TestCase):
                 "quality_level": "A",
             }).to_csv(macro_dir / f"{series_id}.csv", index=False)
 
+    def _write_stress_macro(self) -> None:
+        """DGS30 每月 +0.6（7 个 ≥50bp 强加息月）→ rate_up_50bp 有样本。"""
+        macro_dir = self.data_root / "processed" / "global_macro"
+        macro_dir.mkdir(parents=True)
+        dates = pd.DatetimeIndex([
+            "2024-01-01", "2024-02-01", "2024-03-01", "2024-04-01",
+            "2024-05-01", "2024-06-01", "2024-07-01", "2024-08-01",
+        ])
+        for series_id, values in [
+            ("DGS30", [1.0, 1.6, 2.2, 2.8, 3.4, 4.0, 4.6, 5.2]),
+            ("DGS10", [2.5] * 8),
+            ("DGS2", [3.0] * 8),
+            ("DFII10", [1.0] * 8),
+        ]:
+            pd.DataFrame({
+                "series_id": series_id,
+                "observation_date": dates.strftime("%Y-%m-%d"),
+                "available_at": (dates + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+                "value": values,
+                "quality_level": "A",
+            }).to_csv(macro_dir / f"{series_id}.csv", index=False)
+
     def _write_risky_fund(self) -> None:
         """重写 fund_daily：000001.SZ 平稳上涨（无风险），164824.SZ 深回撤（red）。"""
         n = 120
@@ -225,8 +247,9 @@ class ReferencePipelineTests(unittest.TestCase):
         for asset in package["assets"]:
             self.assertIsNone(asset["red_flag"])
 
-    def test_pipeline_include_stress_warning(self) -> None:
-        # include_stress=True 仅追加占位 warning，不崩溃、不实现压力逻辑。
+    def test_pipeline_include_stress_filled(self) -> None:
+        # include_stress=True：DGS30 连续 +0.6 → 各资产 macro_stress 含 rate_up_50bp。
+        self._write_stress_macro()
         record = run_pipeline(
             target_date="2026-08-06",
             data_root=self.data_root,
@@ -237,4 +260,25 @@ class ReferencePipelineTests(unittest.TestCase):
             include_stress=True,
         )
         self.assertEqual(record["status"], "COMPLETED")
-        self.assertTrue(any("include_stress" in warning for warning in record["warnings"]))
+        package = self._read_package()
+        for asset in package["assets"]:
+            stress = asset["macro_stress"]
+            self.assertIn("rate_up_50bp", stress)
+            self.assertGreaterEqual(stress["rate_up_50bp"]["sample_count"], 5)
+            self.assertIsNotNone(stress["rate_up_50bp"]["pnl_pct"])
+
+    def test_pipeline_include_stress_default_empty(self) -> None:
+        # include_stress=False（默认）：macro_stress 保持空 dict，零开销。
+        self._write_stress_macro()
+        record = run_pipeline(
+            target_date="2026-08-06",
+            data_root=self.data_root,
+            integration=self.integration,
+            online_ok=False,
+            asset_pool=self.pool,
+            risk_params=self.risk_params,
+        )
+        self.assertEqual(record["status"], "COMPLETED")
+        package = self._read_package()
+        for asset in package["assets"]:
+            self.assertEqual(asset["macro_stress"], {})

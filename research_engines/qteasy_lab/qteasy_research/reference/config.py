@@ -54,3 +54,12 @@ BENCHMARKS = {
     "bond_us": "TLT",
     "gold": "GLD",
 }
+
+# ---- 阶段三：压力模拟器情景幅度 ----
+# DGS30 月变化 ≥ +0.50（50bp）视为强加息压力（rate_up 的 states 判定是 ≥+0.20，即 20bp）。
+STRESS_RATE_UP_BP = 0.50
+STRESS_RATE_DOWN_BP = -0.50
+# 实际利率上行幅度，与 global_etf_engine._macro_state real_yield_up 判定（≥+0.10）一致。
+STRESS_REAL_YIELD_UP_BP = 0.10
+# 最小样本：低于该值压力损益置 None + confidence=low（与 hedge_efficiency._MIN_SAMPLES 对齐）。
+STRESS_MIN_SAMPLES = 5
