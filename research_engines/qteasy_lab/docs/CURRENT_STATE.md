@@ -84,18 +84,25 @@
 - 口径调整（相对设计文档 §3.3）：「macro_stress 无显著压力」是**不看空**而非看多，避免无压力资产
   全部看多、一致率虚高；信号矛盾（多空同时触发）→ neutral 不硬判。
 
-## 下一步（两项目协同节奏）
+## 下一步（两项目协同节奏 + 策略契约条件任务）
 
-| 顺序 | 任务 | 负责方 | 触发条件 |
+**关键决策变更（2026-08-07）**：策略级别回测归属项目B。策略规则定义/契约导出归 A；
+回测引擎/回测报告（`reports/backtest/`）/参数扫描扩展归 B。约定基线见
+`docs/strategy_contract_design.md`。
+
+**条件触发任务（当前均就绪等待，B 不编码）**：
+
+| # | 任务 | 触发条件 | 说明 |
 |---|---|---|---|
-| 1 | 收集真实干预数据 | A | 日常使用审核工作台，自然累积 `human_override_log` |
-| 2 | 运行 human_machine_compare 真实月报 | B | `human_override_log` **≥30 条且覆盖 ≥3 策略**（当前 4 条，预计 1-2 个月） |
-| 3 | 策略详情制订 | A | 审核工作台运行稳定 + 策略可行性分析启动后 |
-| 4 | 策略参数扫描标准化 | B | A 侧策略详情制订完成，提供需扫描的参数范围 |
-| 5 | 因子有效性回溯测试 | B | B 侧数据包连续运行 ≥1 个月，且 A 侧策略详情制订完成 |
+| 1 | 读取策略规则契约 | A 侧 `strategy_contract.json` 写入共享目录后 | 读 `data/integration/strategy_contracts/` |
+| 2 | 策略级别回测引擎开发 | 契约格式已定，且至少一个策略契约可读 | 基于契约 + B 行情/宏观 → `reports/backtest/` |
+| 3 | 参数扫描扩展 | A 策略详情制订完成，提供参数范围 | 扩展 param_sweep 为全策略参数扫描 |
+| 4 | 因子有效性回溯测试 | B 数据包连续运行 ≥1 个月 + A 策略详情完成 | 对当前因子做 IC/IR 回溯测试 |
+| 5 | human_machine_compare 真实月报 | `human_override_log` **≥30 条且覆盖 ≥3 策略**（当前 4 条，预计 1-2 个月） | `python scripts/run_human_machine_compare.py --package <最新决策包>` |
 
 - B 侧 human_machine_compare 分析引擎已就绪（`reference/human_machine_compare.py` + CLI），
-  真实月报可随时触发：`scripts/run_human_machine_compare.py --target-month YYYY-MM --package <决策包>`
-  （**正式月报需带 `--package`**，否则无决策包 → B 维度缺失 → 信号全中性，只产出骨架）。
-- **唯一阻塞项**：等待 A 侧 `human_override_log` 累积至阈值（≥30 条且覆盖 ≥3 策略）。
+  任务 5 可随时触发；**正式月报需带 `--package`**（裸命令无决策包 → 信号全中性，只产出骨架）。
+- **契约约定草案**（`docs/strategy_contract_design.md` §3）：strategy_id / decision_rule /
+  target_weights / pref_* / rebalance_frequency / min_weight / max_weight / signal_filters。
+  A 产契约草案后 B 按此基线审阅确认口径。
 - A 侧审核工作台已上线（179bf52），B 字段已接入展示；B 无需介入，仅响应 A 侧字段需求。
