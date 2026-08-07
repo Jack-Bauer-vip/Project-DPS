@@ -92,8 +92,10 @@
 | 2 | 运行 human_machine_compare 真实月报 | B | `human_override_log` **≥30 条且覆盖 ≥3 策略**（当前 4 条，预计 1-2 个月） |
 | 3 | 策略详情制订 | A | 审核工作台运行稳定 + 策略可行性分析启动后 |
 | 4 | 策略参数扫描标准化 | B | A 侧策略详情制订完成，提供需扫描的参数范围 |
+| 5 | 因子有效性回溯测试 | B | B 侧数据包连续运行 ≥1 个月，且 A 侧策略详情制订完成 |
 
 - B 侧 human_machine_compare 分析引擎已就绪（`reference/human_machine_compare.py` + CLI），
-  真实月报可随时触发：`scripts/run_human_machine_compare.py --target-month YYYY-MM --package <决策包>`。
+  真实月报可随时触发：`scripts/run_human_machine_compare.py --target-month YYYY-MM --package <决策包>`
+  （**正式月报需带 `--package`**，否则无决策包 → B 维度缺失 → 信号全中性，只产出骨架）。
 - **唯一阻塞项**：等待 A 侧 `human_override_log` 累积至阈值（≥30 条且覆盖 ≥3 策略）。
 - A 侧审核工作台已上线（179bf52），B 字段已接入展示；B 无需介入，仅响应 A 侧字段需求。
