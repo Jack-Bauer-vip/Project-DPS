@@ -66,6 +66,7 @@ def main(args: argparse.Namespace) -> dict:
         data_root=args.data_root,
         asset_pool=args.asset_pool,
         integration=integration,
+        include_stress=args.include_stress,
     )
     print(f"[real] 共享目录写入：{integration.root / 'systemB_ref' / record['run_id']}")
     print(f"[real] status={record['status']} verify.ok={record['verify'].get('ok')} "
