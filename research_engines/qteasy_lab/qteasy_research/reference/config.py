@@ -33,6 +33,8 @@ OUTPUTS_DIR = OUTPUT_DIR
 # ---- 集成契约常量 ----
 SCHEMA_VERSION = "1.0"
 PIPELINE_VERSION = "0.1.0"
+# 共享目录 backup/ 保留的最近版本数（审核资料 4.3/4.4：manifest 保留最近 30 版）。
+MAX_BACKUPS = 30
 # 新鲜度阈值：data_asof 早于当前日期 2 天，系统A可丢弃。
 DATA_ASOF_MAX_AGE_DAYS = 2
 # 心跳阈值：系统A check_b_heartbeat() 以 3 天判断B是否在线，两侧对齐。

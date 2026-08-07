@@ -18,7 +18,12 @@ from typing import Any
 
 import pandas as pd
 
-from qteasy_research.reference.config import HEARTBEAT_MAX_AGE_DAYS, PIPELINE_VERSION, SCHEMA_VERSION
+from qteasy_research.reference.config import (
+    HEARTBEAT_MAX_AGE_DAYS,
+    MAX_BACKUPS,
+    PIPELINE_VERSION,
+    SCHEMA_VERSION,
+)
 from qteasy_research.reference.metadata import (
     build_header,
     embed_header_any,
@@ -161,7 +166,7 @@ class IntegrationDir:
         }
 
     def backup_run(self, run_id: str) -> Path:
-        """把运行目录复制到 ``backup/{run_id}``（manifest 保留最近 N 版）。"""
+        """把运行目录复制到 ``backup/{run_id}``（成功后修剪到最近 N 版）。"""
         run_dir = self.root / REF_DIR / run_id
         backup_dir = self.root / BACKUP_DIR / run_id
         if not run_dir.exists():
@@ -169,6 +174,7 @@ class IntegrationDir:
         if backup_dir.exists():
             shutil.rmtree(backup_dir)
         shutil.copytree(run_dir, backup_dir)
+        self._prune_backups()
         return backup_dir
 
     # ---- 心跳 ----
@@ -245,7 +251,11 @@ class IntegrationDir:
     # ---- 回滚（阶段二骨架） ----
 
     def rollback_to(self, run_id: str) -> Path:
-        """从 ``backup/{run_id}`` 恢复到 ``systemB_ref/{run_id}``（阶段二启用）。"""
+        """从 ``backup/{run_id}`` 恢复到 ``systemB_ref/{run_id}``（阶段二启用）。
+
+        恢复成功后同样触发一次备份修剪：防止回滚动作后备份总数超上限
+        （审核确认项 4.3/4.4）。
+        """
         backup_dir = self.root / BACKUP_DIR / run_id
         run_dir = self.root / REF_DIR / run_id
         if not backup_dir.exists():
@@ -253,7 +263,44 @@ class IntegrationDir:
         if run_dir.exists():
             shutil.rmtree(run_dir)
         shutil.copytree(backup_dir, run_dir)
+        self._prune_backups()
         return run_dir
+
+    # ---- 备份修剪 ----
+
+    def _prune_backups(self, max_keep: int = MAX_BACKUPS) -> list[str]:
+        """把 ``backup/`` 修剪到最近 ``max_keep`` 版（审核资料 4.3/4.4）。
+
+        run_id 约定 YYYYMMDD 前缀，字典序即时间序：按目录名升序保留最后
+        ``max_keep`` 个，删除更旧的备份目录，并同步清理 manifest 中对应
+        记录、修正 ``newest_run``（防御：若被删项恰好是最新——正常不会，
+        因只删最旧——则重算剩余最大值）。
+
+        返回被删除的 run_id 列表。
+        """
+        backup_root = self.root / BACKUP_DIR
+        if not backup_root.exists():
+            return []
+        run_ids = sorted(p.name for p in backup_root.iterdir() if p.is_dir())
+        stale = run_ids[:-max_keep] if max_keep > 0 and len(run_ids) > max_keep else []
+        for run_id in stale:
+            shutil.rmtree(backup_root / run_id)
+        if stale:
+            self._prune_manifest(stale)
+        return stale
+
+    def _prune_manifest(self, removed: list[str]) -> None:
+        """删除 manifest 中被修剪备份的 run 记录，并修正 ``newest_run``。"""
+        manifest = self._load_manifest()
+        drop = set(removed)
+        runs = {rid: rec for rid, rec in manifest.get("runs", {}).items() if rid not in drop}
+        manifest["runs"] = runs
+        newest = manifest.get("newest_run")
+        if newest in drop or newest not in runs:
+            manifest["newest_run"] = max(runs) if runs else None
+        (self.root / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
 
 
 def _sha256(path: Path) -> str:

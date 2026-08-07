@@ -88,6 +88,31 @@
 - **实施解耦与版本对齐**：B 写端基础层优先；A 读端骨架可同步/稍后，两端经共享目录契约解耦；`data_asof` 新鲜度（2 天）B/A 共用同一 `validate_freshness` 逻辑，防规则漂移。
 - 审核资料更新为评审修订版（`PROJECT_AUDIT.md` / `.pdf`，10 页），含 9.3 评审决议六表 + "给项目A的修正指令"（可直接复制转发）。
 
+## 阶段二（M3）决策（2026-08-07 记录）
+
+背景：按 PROJECT_AUDIT 6.2 方案骨架对六模块另行立项。用户裁决阶段二**只做 3 项**，其余推后阶段三。
+
+- **阶段二范围 = 最精简 3 项**：`duration_phase`（宏观持续期，填充 `macro_regime`）+ `red_flag`
+  （逐资产红/橙/黄，填充 `asset.red_flag`）+ 版本回滚启用。**明确不做** stress_simulator /
+  param_sweep / human_machine_compare（推后阶段三）；pipeline 仅保留 `include_stress=False`
+  占位开关（True 只追加 warning，不实现）。
+- **red_flag 逐资产评估**：与 A 单资产风险灯形成交叉验证，不重复造轮子；直接填充 schema
+  预留字段，**不改 schema**。指标口径镜像 A `indicators.py`（近 60 日高点回撤 + 日频 20 日
+  波动率未年化）与 `risk.py:152-156/210-226`（回撤三档优先、类型→vol 阈值），测试锁定边界。
+- **red_flag 阈值容错**：`load_risk_thresholds` 读 A `strategy_params.json`；文件/JSON/段落
+  缺失整体降级 `(None,[warning])`，单项缺失**仅该缺失项**默认兜底 + warning，其余保留文件值
+  （不整体降级、不丢用户配置）。
+- **duration_phase 多方向性并存**：9 状态全部算连续月数（`state_durations` 全量输出），scalar
+  `phase` 只由方向性状态驱动并按 `_PHASE_PRIORITY` 取第一个，`phase_basis` 标注依据；分档
+  `<3 early / <6 mid / >=6 late`；降级链（空表/末行 unavailable/无方向性）→ `phase=None` + 显式
+  `reason`，不把缺失当早段。**macro_table 空时不入包任何键**（保住 `macro_regime=={}` 回归）。
+- **备份修剪**：`backup/` 按 run_id 字典序（YYYYMMDD==时间序）保留最近 30 版（`MAX_BACKUPS`），
+  同步修剪 manifest 记录并修正 `newest_run`；`backup_run` 成功后 + `rollback_to` 成功后各调用一次。
+- **回滚联调方式**：篡改 `decision_ref_package.json` 数值字段（**而非删除 `.ready`**），回滚后
+  断言数值恢复 + `verify_run ok`，验证文件内容确实还原。
+- **阶段二完成后通知 A 侧**：决策包新增 `macro_regime.phase` 与 `asset.red_flag` 字段（A
+  `integration_reader.py` 读完整 JSON 自动带入，无需改动；风控预警展示逻辑由 A 审核工作台单独设计）。
+
 ## 安全边界
 
 - 不自动修改正式资产池。

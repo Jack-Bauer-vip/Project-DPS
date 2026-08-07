@@ -14,7 +14,9 @@ from qteasy_research.reference.config import (
     OUTPUTS_DIR,
     SYSTEM_A_ROOT,
 )
+from qteasy_research.reference.duration_phase import build_duration_phase
 from qteasy_research.reference.grid_reference import build_grid_reference
+from qteasy_research.reference.red_flag import assess_red_flags, load_risk_thresholds
 from qteasy_research.reference.hedge_efficiency import build_hedge_efficiency
 from qteasy_research.reference.metadata import (
     build_header,
@@ -51,6 +53,8 @@ __all__ = [
     # config 常量
     "BENCHMARKS", "DATA_ASOF_MAX_AGE_DAYS", "HEARTBEAT_MAX_AGE_DAYS",
     "INTEGRATION_DIR", "OUTPUTS_DIR", "SYSTEM_A_ROOT",
+    # duration_phase（阶段二）
+    "build_duration_phase",
     # grid_reference（B1-1）
     "build_grid_reference",
     # hedge_efficiency（B1-2）
@@ -60,6 +64,8 @@ __all__ = [
     "parse_header_csv", "today_iso", "validate_freshness", "write_parquet_with_meta",
     # pipeline
     "run_pipeline",
+    # red_flag（阶段二）
+    "assess_red_flags", "load_risk_thresholds",
     # rolling_beta
     "multi_benchmark_beta", "rolling_beta", "rolling_beta_summary",
     # schema

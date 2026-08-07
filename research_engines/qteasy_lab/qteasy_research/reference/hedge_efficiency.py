@@ -158,8 +158,11 @@ def _scenario_row(
     }
     if monthly.empty or macro_change.empty:
         return base
-    # 仅保留包含该情景的月份（states 为该月宏观状态列表）。
-    has_scenario = monthly["states"].apply(lambda states: scenario in (states or []))
+    # 仅保留包含该情景的月份（states 为该月宏观状态列表；左连接可能产生 NaN，
+    # 防御非列表值避免 ``in`` 对 float 崩溃——资产月份超出场景表范围时会命中）。
+    has_scenario = monthly["states"].apply(
+        lambda states: isinstance(states, list) and scenario in states
+    )
     subset = monthly.loc[has_scenario].copy()
     if subset.empty:
         return base

@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from qteasy_research.reference import IntegrationDir, run_pipeline
@@ -38,6 +39,13 @@ class ReferencePipelineTests(unittest.TestCase):
             "theme": ["a", "b"],
             "status": ["active", "active"],
         }).to_csv(self.pool, index=False)
+        # 系统A风控阈值 fixture（测试隔离：绝不让管线读到真实 A strategy_params.json）。
+        self.risk_params = self.root / "strategy_params.json"
+        self.risk_params.write_text(json.dumps({"risk_thresholds": {
+            "red_drawdown": -0.18, "orange_drawdown": -0.12, "yellow_drawdown": -0.07,
+            "volatility_yellow": 0.035, "volatility_yellow_etf": 0.045,
+            "volatility_yellow_stock": 0.035, "volatility_yellow_bond_etf": 0.015,
+        }}, ensure_ascii=False), encoding="utf-8")
         self.integration = IntegrationDir(self.root / "integration")
 
     def tearDown(self) -> None:
@@ -50,7 +58,51 @@ class ReferencePipelineTests(unittest.TestCase):
             integration=self.integration,
             online_ok=False,
             asset_pool=self.pool,
+            risk_params=self.risk_params,
         )
+
+    def _read_package(self) -> dict:
+        return json.loads(
+            (self.root / "integration" / "systemB_ref" / "20260806" / "decision_ref_package.json")
+            .read_text(encoding="utf-8")
+        )
+
+    def _write_macro_series(self) -> None:
+        """写 4 条宏观序列：DGS30 连续 8 月 +0.4 → 末 7 月 rate_up（phase=late）。"""
+        macro_dir = self.data_root / "processed" / "global_macro"
+        macro_dir.mkdir(parents=True)
+        dates = pd.DatetimeIndex([
+            "2024-01-01", "2024-02-01", "2024-03-01", "2024-04-01",
+            "2024-05-01", "2024-06-01", "2024-07-01", "2024-08-01",
+        ])
+        for series_id, values in [
+            ("DGS30", [1.0, 1.4, 1.8, 2.2, 2.6, 3.0, 3.4, 3.8]),
+            ("DGS10", [2.5] * 8),
+            ("DGS2", [3.0] * 8),   # DGS10-DGS2=-0.5 → curve_inverted
+            ("DFII10", [1.0] * 8),  # 平稳 → real_yield_stable
+        ]:
+            pd.DataFrame({
+                "series_id": series_id,
+                "observation_date": dates.strftime("%Y-%m-%d"),
+                "available_at": (dates + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+                "value": values,
+                "quality_level": "A",
+            }).to_csv(macro_dir / f"{series_id}.csv", index=False)
+
+    def _write_risky_fund(self) -> None:
+        """重写 fund_daily：000001.SZ 平稳上涨（无风险），164824.SZ 深回撤（red）。"""
+        n = 120
+        dates = pd.date_range("2024-01-02", periods=n, freq="B")
+        safe = list(100.0 + np.arange(n) * 0.05)
+        risky = list(np.linspace(100.0, 150.0, 60)) + list(np.linspace(150.0, 120.0, 60))
+        frame = pd.DataFrame({
+            "ts_code": ["000001.SZ"] * n + ["164824.SZ"] * n,
+            "trade_date": list(dates.strftime("%Y-%m-%d")) * 2,
+            "close": safe + risky,
+            "volume": [1000] * (2 * n),
+            "amount": [10000] * (2 * n),
+        })
+        (self.data_root / "fund_daily.csv").write_text(frame.to_csv(index=False), encoding="utf-8")
 
     def test_pipeline_full_chain(self) -> None:
         record = self._run()
@@ -115,3 +167,74 @@ class ReferencePipelineTests(unittest.TestCase):
             )
         heartbeat = json.loads((self.root / "integration" / "b_heartbeat.json").read_text(encoding="utf-8"))
         self.assertEqual(heartbeat["status"], "error")
+
+    # ---- 阶段二：宏观持续期 + 逐资产风控旗 ----
+
+    def test_pipeline_duration_phase_merged(self) -> None:
+        self._write_macro_series()
+        record = self._run()
+        self.assertEqual(record["status"], "COMPLETED")
+        package = self._read_package()
+        regime = package["macro_regime"]
+        self.assertEqual(regime["phase"], "late")
+        self.assertEqual(regime["phase_basis"], "rate_up")
+        self.assertEqual(regime["phase_confidence"], "high")
+        self.assertEqual(regime["state_durations"]["rate_up"], 7)
+        self.assertEqual(regime["state_durations"]["curve_inverted"], 8)
+        self.assertEqual(regime["states"], ["rate_up", "curve_inverted", "real_yield_stable"])
+
+    def test_pipeline_duration_phase_disabled(self) -> None:
+        self._write_macro_series()
+        run_pipeline(
+            target_date="2026-08-06",
+            data_root=self.data_root,
+            integration=self.integration,
+            online_ok=False,
+            asset_pool=self.pool,
+            risk_params=self.risk_params,
+            include_duration_phase=False,
+        )
+        package = self._read_package()
+        self.assertNotIn("phase", package["macro_regime"])
+        self.assertIn("states", package["macro_regime"])
+
+    def test_pipeline_red_flag_filled(self) -> None:
+        self._write_risky_fund()
+        record = self._run()
+        self.assertEqual(record["status"], "COMPLETED")
+        package = self._read_package()
+        by_id = {asset["asset_id"]: asset for asset in package["assets"]}
+        self.assertIsNone(by_id["000001.SZ"]["red_flag"], "平稳资产无风险旗")
+        risky = by_id["164824.SZ"]["red_flag"]
+        self.assertEqual(risky["level"], "red")
+        self.assertEqual(risky["triggered_by"], ["drawdown_60d"])
+        self.assertTrue(risky["approval_required"] is True)
+
+    def test_pipeline_red_flag_disabled(self) -> None:
+        self._write_risky_fund()
+        run_pipeline(
+            target_date="2026-08-06",
+            data_root=self.data_root,
+            integration=self.integration,
+            online_ok=False,
+            asset_pool=self.pool,
+            risk_params=self.risk_params,
+            include_red_flag=False,
+        )
+        package = self._read_package()
+        for asset in package["assets"]:
+            self.assertIsNone(asset["red_flag"])
+
+    def test_pipeline_include_stress_warning(self) -> None:
+        # include_stress=True 仅追加占位 warning，不崩溃、不实现压力逻辑。
+        record = run_pipeline(
+            target_date="2026-08-06",
+            data_root=self.data_root,
+            integration=self.integration,
+            online_ok=False,
+            asset_pool=self.pool,
+            risk_params=self.risk_params,
+            include_stress=True,
+        )
+        self.assertEqual(record["status"], "COMPLETED")
+        self.assertTrue(any("include_stress" in warning for warning in record["warnings"]))

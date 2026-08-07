@@ -27,9 +27,11 @@ from qteasy_research.reference.config import (
     SYSTEM_B_DATA_ROOT,
     VOLATILITY_WINDOWS,
 )
+from qteasy_research.reference.duration_phase import build_duration_phase
 from qteasy_research.reference.grid_reference import build_grid_reference
 from qteasy_research.reference.hedge_efficiency import build_hedge_efficiency
 from qteasy_research.reference.macro_scenarios import build_monthly_scenario_table
+from qteasy_research.reference.red_flag import assess_red_flags, load_risk_thresholds
 from qteasy_research.reference.metadata import build_header, embed_header_any, today_iso
 from qteasy_research.reference.rolling_beta import multi_benchmark_beta
 from qteasy_research.reference.schema import AssetDimensions, DecisionRefPackage
@@ -165,6 +167,10 @@ def run_pipeline(
     asset_pool: str | Path | None = None,
     include_grid: bool = True,
     include_hedge: bool = True,
+    include_duration_phase: bool = True,
+    include_red_flag: bool = True,
+    include_stress: bool = False,
+    risk_params: str | Path | None = None,
     output_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """执行参考维度管线，写共享目录（或 dry-run 到本地 output_root）。
@@ -177,6 +183,14 @@ def run_pipeline(
         asset_pool: 系统A asset_pool.csv 路径（默认 config 常量）。
         include_grid: 是否计算并输出网格参考表（B1-1）。
         include_hedge: 是否计算并输出宏观对冲效率表（B1-2）。
+        include_duration_phase: 是否并入宏观持续期（phase/state_durations 到
+            ``macro_regime``）；macro_table 为空时不并入任何键。
+        include_red_flag: 是否逐资产评估红/橙/黄风控旗（读取系统A
+            ``risk_thresholds`` 阈值；阈值缺失降级为无风险 + warning）。
+        include_stress: 阶段三占位开关。True 仅追加 warning 提示未实现，
+            不执行任何压力模拟逻辑。
+        risk_params: 系统A ``strategy_params.json`` 路径（默认 ``config``
+            常量）；测试注入临时 fixture 用，避免读到真实 A 配置。
         output_root: 非 None 时走 dry-run：三件套写到该目录（不写共享目录、
             不 write_run/backup/verify），供共享目录未创建时本地验证。
 
@@ -196,6 +210,10 @@ def run_pipeline(
     # dry-run 用隔离的 IntegrationDir(output_root) 写心跳，证明链路在线但不碰真实共享目录。
     sink = IntegrationDir(output_root) if dry_run else integration
 
+    if include_stress:
+        warnings.append(
+            "include_stress 为阶段三占位开关：压力模拟尚未实现，本次忽略该请求。"
+        )
     sink.write_heartbeat(status="running")
     try:
         assets = read_active_assets(asset_pool)
@@ -221,6 +239,15 @@ def run_pipeline(
                     "month": last.get("month"),
                     "macro_unavailable": bool(last.get("macro_unavailable", False)),
                 }
+                # 阶段二：宏观持续期并入（空表不并入任何键，保住 macro_regime=={} 回归）。
+                if include_duration_phase:
+                    duration = build_duration_phase(macro_table)
+                    macro_regime["phase"] = duration["phase"]
+                    macro_regime["phase_confidence"] = duration["phase_confidence"]
+                    macro_regime["phase_basis"] = duration["phase_basis"]
+                    macro_regime["state_durations"] = duration["durations"]
+                    if duration["reason"] is not None:
+                        macro_regime["phase_reason"] = duration["reason"]
         except Exception as exc:
             warnings.append(f"宏观场景识别失败：{type(exc).__name__}: {exc}")
 
@@ -232,6 +259,14 @@ def run_pipeline(
                     asset_id, row.get("name"), aligned.get(asset_id, pd.DataFrame()), bench_frames
                 )
             )
+
+        # 阶段二：逐资产红/橙/黄风控旗（循环后填充；阈值缺失降级为全 None + warning）。
+        if include_red_flag:
+            thresholds, threshold_warnings = load_risk_thresholds(risk_params)
+            warnings.extend(threshold_warnings)
+            flags = assess_red_flags(assets, aligned, thresholds)
+            for dim in dimensions:
+                dim.red_flag = flags.get(dim.asset_id)
 
         package = DecisionRefPackage(
             generated_date=generated_date,
