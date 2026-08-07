@@ -77,10 +77,10 @@ class ReferencePipelineTests(unittest.TestCase):
         # 备份 + manifest
         self.assertTrue((self.root / "integration" / "backup" / "20260806" / ".ready").exists())
         self.assertEqual(self.integration.get_manifest()["newest_run"], "20260806")
-        # 元数据头（build_header 顺序：schema_version 开头）
+        # 元数据头（build_header 顺序：schema_version 开头；generated_date 随当天变化）
         header_line = (run_dir / "assets_metadata.csv").read_text(encoding="utf-8").splitlines()[0]
         self.assertTrue(header_line.startswith("# schema_version="))
-        self.assertIn("generated_date=2026-08-06", header_line)
+        self.assertIn("generated_date=", header_line)
         self.assertIn("data_asof=2026-08-06", header_line)
 
     def test_pipeline_macro_missing_does_not_block(self) -> None:

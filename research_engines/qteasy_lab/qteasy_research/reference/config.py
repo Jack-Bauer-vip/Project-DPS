@@ -27,6 +27,8 @@ SYSTEM_A_RISK_PARAMS = SYSTEM_A_ROOT / "config" / "strategy_params.json"
 SYSTEM_B_DATA_ROOT = PROJECT_ROOT / "data"
 TRADER_FINGERPRINT_DIR = PROJECT_ROOT / "reports" / "trader_fingerprint"
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
+# dry-run 目标目录（共享目录未创建时，端到端管线产出三件套到本地 outputs/）。
+OUTPUTS_DIR = OUTPUT_DIR
 
 # ---- 集成契约常量 ----
 SCHEMA_VERSION = "1.0"

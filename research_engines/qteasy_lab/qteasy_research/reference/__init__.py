@@ -11,8 +11,11 @@ from qteasy_research.reference.config import (
     DATA_ASOF_MAX_AGE_DAYS,
     HEARTBEAT_MAX_AGE_DAYS,
     INTEGRATION_DIR,
+    OUTPUTS_DIR,
     SYSTEM_A_ROOT,
 )
+from qteasy_research.reference.grid_reference import build_grid_reference
+from qteasy_research.reference.hedge_efficiency import build_hedge_efficiency
 from qteasy_research.reference.metadata import (
     build_header,
     embed_header_csv,
@@ -34,6 +37,10 @@ from qteasy_research.reference.shared_dir import (
     IntegrationDir,
     IntegrationDirMissing,
 )
+from qteasy_research.reference.trader_fingerprint import (
+    analyze_trader_fingerprint,
+    render_fingerprint_markdown,
+)
 from qteasy_research.reference.volatility_cone import (
     build_volatility_cone,
     current_vol_rank,
@@ -43,7 +50,11 @@ from qteasy_research.reference.volatility_cone import (
 __all__ = [
     # config 常量
     "BENCHMARKS", "DATA_ASOF_MAX_AGE_DAYS", "HEARTBEAT_MAX_AGE_DAYS",
-    "INTEGRATION_DIR", "SYSTEM_A_ROOT",
+    "INTEGRATION_DIR", "OUTPUTS_DIR", "SYSTEM_A_ROOT",
+    # grid_reference（B1-1）
+    "build_grid_reference",
+    # hedge_efficiency（B1-2）
+    "build_hedge_efficiency",
     # metadata
     "build_header", "embed_header_csv", "embed_header_any", "now_iso",
     "parse_header_csv", "today_iso", "validate_freshness", "write_parquet_with_meta",
@@ -55,6 +66,8 @@ __all__ = [
     "AssetDimensions", "DecisionRefPackage",
     # shared_dir
     "IntegrationDir", "IntegrationDirMissing",
+    # trader_fingerprint（B1-3）
+    "analyze_trader_fingerprint", "render_fingerprint_markdown",
     # volatility_cone
     "build_volatility_cone", "current_vol_rank", "suggest_reference_spread",
 ]

@@ -1,7 +1,9 @@
 """参考维度端到端管线：资产池对齐 → 维度计算 → 组装决策包 → 写共享目录。
 
-基础层只产出 ``decision_ref_package.json`` + ``assets_metadata.csv``；B1-1/B1-2
-的网格参考表与宏观对冲效率 parquet 由阶段一脚本补充（见 build_* 脚本）。
+产出决策包 ``decision_ref_package.json`` + ``assets_metadata.csv``，阶段一并入
+网格参考表 ``grid_reference_table.csv``（B1-1）与宏观对冲效率
+``macro_hedge_efficiency.parquet``（B1-2）。``output_root`` 非 None 时走 dry-run，
+三件套只写到本地目录（共享目录未创建时的本地验证路径）。
 任何路径都写心跳（失败也证明 B 在线）。
 """
 
@@ -25,8 +27,10 @@ from qteasy_research.reference.config import (
     SYSTEM_B_DATA_ROOT,
     VOLATILITY_WINDOWS,
 )
+from qteasy_research.reference.grid_reference import build_grid_reference
+from qteasy_research.reference.hedge_efficiency import build_hedge_efficiency
 from qteasy_research.reference.macro_scenarios import build_monthly_scenario_table
-from qteasy_research.reference.metadata import today_iso
+from qteasy_research.reference.metadata import build_header, embed_header_any, today_iso
 from qteasy_research.reference.rolling_beta import multi_benchmark_beta
 from qteasy_research.reference.schema import AssetDimensions, DecisionRefPackage
 from qteasy_research.reference.shared_dir import IntegrationDir
@@ -159,8 +163,11 @@ def run_pipeline(
     integration: IntegrationDir | None = None,
     online_ok: bool = True,
     asset_pool: str | Path | None = None,
+    include_grid: bool = True,
+    include_hedge: bool = True,
+    output_root: str | Path | None = None,
 ) -> dict[str, Any]:
-    """执行参考维度管线，写共享目录并返回运行记录。
+    """执行参考维度管线，写共享目录（或 dry-run 到本地 output_root）。
 
     参数：
         target_date: 数据截止日（data_asof），默认今天；run_id 取其 YYYYMMDD。
@@ -168,8 +175,15 @@ def run_pipeline(
         integration: 共享目录操作对象（默认真实系统A共享目录）。
         online_ok: 行情缺失时是否允许在线补齐。
         asset_pool: 系统A asset_pool.csv 路径（默认 config 常量）。
+        include_grid: 是否计算并输出网格参考表（B1-1）。
+        include_hedge: 是否计算并输出宏观对冲效率表（B1-2）。
+        output_root: 非 None 时走 dry-run：三件套写到该目录（不写共享目录、
+            不 write_run/backup/verify），供共享目录未创建时本地验证。
 
-    返回：``{"run_id", "status", "warnings", "package", "verify", "manifest", "consumed"}``。
+    返回：
+        dry-run：``{"run_id", "status": "DRY_RUN", "warnings", "output_root",
+        "files", "manifest"}``；真实写入：``{"run_id", "status", "warnings",
+        "package", "verify", "manifest", "consumed"}``。
     """
     integration = integration or IntegrationDir()
     data_root_path = Path(data_root) if data_root else SYSTEM_B_DATA_ROOT
@@ -178,7 +192,11 @@ def run_pipeline(
     run_id = data_asof.replace("-", "")
     warnings: list[str] = []
 
-    integration.write_heartbeat(status="running")
+    dry_run = output_root is not None
+    # dry-run 用隔离的 IntegrationDir(output_root) 写心跳，证明链路在线但不碰真实共享目录。
+    sink = IntegrationDir(output_root) if dry_run else integration
+
+    sink.write_heartbeat(status="running")
     try:
         assets = read_active_assets(asset_pool)
         aligned = align_pool_price_history(
@@ -190,12 +208,13 @@ def run_pipeline(
                 warnings.append(str(gap["warning"]))
         bench_frames = _load_benchmark_frames(data_root_path)
 
-        # 宏观状态（最新月），供 macro_regime 参考。
+        # 宏观状态（最新月 + 全场景表，macro_regime 与 B1-2 共用一次计算）。
+        macro_table: pd.DataFrame = pd.DataFrame()
         macro_regime: dict[str, Any] = {}
         try:
-            scenario_table = build_monthly_scenario_table(data_root_path)
-            if not scenario_table.empty:
-                last = scenario_table.iloc[-1]
+            macro_table = build_monthly_scenario_table(data_root_path)
+            if not macro_table.empty:
+                last = macro_table.iloc[-1]
                 macro_regime = {
                     "states": list(last.get("states") or []),
                     "rate_proxy": last.get("rate_proxy"),
@@ -221,7 +240,6 @@ def run_pipeline(
             macro_regime=macro_regime,
             warnings=warnings,
         )
-        # 基础层只产出决策包 + 资产元数据表；B1-1/B1-2 由阶段一脚本并入。
         metadata_frame = pd.DataFrame([
             {"asset_id": gap["asset_id"], "quality_level": gap["quality_level"],
              "available": gap["available"], "warning": gap["warning"]}
@@ -231,6 +249,32 @@ def run_pipeline(
             "decision_ref_package.json": package.to_dict(),
             "assets_metadata.csv": metadata_frame,
         }
+        # 阶段一：B1-1 网格参考表 + B1-2 宏观对冲效率并入管线产出。
+        if include_grid:
+            payloads["grid_reference_table.csv"] = build_grid_reference(
+                assets, aligned, bench_frames
+            )
+        if include_hedge:
+            payloads["macro_hedge_efficiency.parquet"] = build_hedge_efficiency(
+                data_root_path, assets, aligned, macro_table
+            )
+
+        if dry_run:
+            header = build_header(generated_date=generated_date, data_asof=data_asof)
+            written: list[str] = []
+            for filename, value in payloads.items():
+                embed_header_any(sink.root / filename, header, value)
+                written.append(filename)
+            sink.write_heartbeat(status="ok")
+            return {
+                "run_id": run_id,
+                "status": "DRY_RUN",
+                "warnings": warnings,
+                "output_root": str(sink.root),
+                "files": written,
+                "manifest": sink.get_manifest(),
+            }
+
         record = integration.write_run(
             run_id,
             payloads,
@@ -251,5 +295,5 @@ def run_pipeline(
             "consumed": integration.list_consumed(),
         }
     except Exception:
-        integration.write_heartbeat(status="error")
+        sink.write_heartbeat(status="error")
         raise
