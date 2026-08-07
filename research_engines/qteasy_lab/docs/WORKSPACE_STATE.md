@@ -6,8 +6,10 @@
 
 - **阶段三（M3）已完成**：压力模拟器（stress_simulator，填充 `macro_stress`）+
   参数网格扫描（param_sweep，独立 CLI）。
-- **全量测试 300 tests OK（skipped=2）**（阶段二 277 + 阶段三新增 23）。
-- **git 状态**：`develop` 分支，阶段二已提交（0ac463a），阶段三待提交。
+- **human_machine_compare 分析引擎已编码**（0f0a7f8，合成数据）：31 测试全绿。
+- **全量测试 331 tests OK（skipped=2）**（阶段二 277 + 阶段三新增 23 + hmc 新增 31）。
+- **git 状态**：`develop` 分支，全部已提交（最新 0f0a7f8），工作区干净。
+- **A 侧审核工作台已上线**（2026-08-07，A PR #2 179bf52）：B 字段已接入展示。
 
 ## 阶段一产出物（均已入库）
 
@@ -74,14 +76,14 @@ stagnation（滞胀，rate_up AND real_yield_up 组合））。仅 `--include-st
 
 ## 关键现状
 
-- 共享目录 `D:\FF Project\data\integration\` **尚未创建**（A 侧未建）→ 真实写入
-  `--real` 待 A 建目录后启用；`run_reference_pipeline --real` 进入前显式 `ensure_root()` 兜底。
+- 共享目录 `D:\FF Project\data\integration\` **已建并通过联调**（2026-08-07）：B `--real`
+  触发 `ensure_root()` 兜底建根；A 读端消费 `systemB_ref/20260807/` 并回执 SUCCESS。
 - A 侧 `asset_pool.csv` active 14 只，全部本地行情覆盖（含 164824.SZ）。
 - A 侧 `strategy_params.json` 存在，`risk_thresholds` 已实际用于 dry-run 风控旗判定。
+- **A 侧审核工作台已上线**（2026-08-07，179bf52）：macro_regime.phase / asset.red_flag /
+  macro_stress 完整接入展示；红牌拦截验证通过（red 红牌弹窗拦截 + 人工确认）。
 - param_sweep 为 B 侧**离线研究工具**：只写 B 本地 `reports/param_sweep/`，不进每日决策包、
   不写共享目录、A 侧无对应消费端（如需 A 消费可另约输出位置）。
-- 待办：**通知 A 侧**决策包新增 `asset.macro_stress` 字段（仅 `--include-stress` 时产出；
-  强加息 ≥50bp 月真实样本稀少，多数资产该情景会降级 low）。
 
 ## 硬约束（不可违反）
 
@@ -90,9 +92,14 @@ stagnation（滞胀，rate_up AND real_yield_up 组合））。仅 `--include-st
 - 非 dry-run 写入前显式调 `IntegrationDir.ensure_root()`（创建根目录 + WARNING，不崩溃）。
 - 全量测试命令：`cd research_engines/qteasy_lab && .venv/Scripts/python.exe -B -m unittest discover -s "D:\Project DPS\tests" -q`
 
-## 下一步
+## 下一步（两项目协同节奏）
 
-- `human_machine_compare` **真实月报**：触发条件 `human_override_log` 达 **≥30 条且覆盖 ≥3 策略**
-  （约 2026-11 后评估）→ 直接运行 CLI 产出，无需再编码（分析引擎已提前落地）。
-- 联调已通过（2026-08-07）：A 已消费 `systemB_ref/20260807/` 并回执 SUCCESS；
-  等待 A 侧 `read_with_audit()` 生产接线 + 审核工作台设计。
+| 顺序 | 任务 | 负责方 | 触发条件 |
+|---|---|---|---|
+| 1 | 收集真实干预数据 | A | 日常使用审核工作台，自然累积 `human_override_log` |
+| 2 | 运行 human_machine_compare 真实月报 | B | `human_override_log` **≥30 条且覆盖 ≥3 策略**（当前 4 条，预计 1-2 个月） |
+| 3 | 策略详情制订 | A | 审核工作台运行稳定 + 策略可行性分析启动后 |
+| 4 | 策略参数扫描标准化 | B | A 侧策略详情制订完成，提供需扫描的参数范围 |
+
+- **唯一阻塞项**：等待 A 侧 `human_override_log` 累积至阈值（≥30 条且覆盖 ≥3 策略）。
+- A 侧审核工作台已上线（179bf52），B 字段已接入展示；B 无需介入，仅响应 A 侧字段需求。

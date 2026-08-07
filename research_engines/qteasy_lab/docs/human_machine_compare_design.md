@@ -3,7 +3,8 @@
 > 设计日期：2026-08-07 ｜ 状态：**分析引擎已编码（2026-08-07，基于合成数据）**
 > 本文档固化的输出格式、口径、数据源映射与依赖清单已落地为代码：
 > `reference/human_machine_compare.py` + `scripts/run_human_machine_compare.py`（31 测试全绿）。
-> 真实月报仍待 `human_override_log` 积累（≥30 条且覆盖 ≥3 策略，约 2026-11 后评估）。
+> 真实月报仍待 `human_override_log` 积累（≥30 条且覆盖 ≥3 策略，预计 1-2 个月后评估）。
+> A 侧审核工作台已上线（2026-08-07，179bf52），B 字段已接入展示，日常使用将自然累积干预记录。
 
 ## 1. 背景与目标
 
@@ -100,7 +101,7 @@ B 维度对该资产的所有策略干预一致（共享基线）。文档明确
 
 | 依赖 | 状态 | 说明 |
 |---|---|---|
-| `human_override_log` ≥3 个月积累 | 🔴 当前 4 行 | 硬依赖，2026-11 后评估启动 |
+| `human_override_log` ≥30 条且覆盖 ≥3 策略 | 🔴 当前 4 条 | 硬依赖，A 日常使用审核工作台自然累积（预计 1-2 个月后评估真实月报） |
 | `decision_ref_package.json` 每日产出 | ✅ 已通 | `--real` 联调通过 |
 | `--include-stress` | ⚠️ 条件 | 需显式带参才产出 `macro_stress`；B 每次 `--real` 已带 |
 | `actual_trade_ledger` | ✅ 640 行 | `decision_source` 全 manual（当前无机器交易，对比暂以人工为主） |
@@ -121,13 +122,14 @@ B 维度对该资产的所有策略干预一致（共享基线）。文档明确
 ```
 ## 监控清单（2026-08-07 起）
 
-- [ ] 任务1：A 侧 read_with_audit 生产接线完成日期
-      （B 下次 --real 写入时 A 是否自动消费并写入回执）
-- [ ] 任务1：连续 ≥3 次 --real 均有 SUCCESS 回执（管道持续畅通确认）
+- [x] 任务1：A 侧审核工作台已上线（2026-08-07，A PR #2 合并 179bf52）
+      B 字段 macro_regime.phase / asset.red_flag / macro_stress 完整接入展示；
+      红牌拦截验证通过（red 红牌弹窗拦截 + 人工确认）
+- [ ] 任务1：连续 ≥3 次 --real 均有 SUCCESS 回执（管道持续畅通确认，尚未达成）
 - [ ] 任务3：A 审核工作台设计反馈的字段需求记录
-      （如 phase 置信度明细 / red_flag 触发历史 / macro_stress 补充情景）
+      （如 phase 置信度明细 / red_flag 触发历史 / macro_stress 补充情景；上线暂未反馈）
 - [ ] 任务3：human_override_log 新增字段（operator 等）时更新本设计口径
-- [ ] 依赖：human_override_log 行数达到 ≥3 个月阈值（约 2026-11），评估立项
+- [ ] 依赖：human_override_log 行数达到 ≥30 条且覆盖 ≥3 策略（当前 4 条，预计 1-2 个月），评估真实月报
 ```
 
 ## 附：A 侧数据源现状（2026-08-07 核实）

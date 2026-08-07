@@ -12,7 +12,7 @@
 | 阶段三（M3） | stress_simulator + param_sweep | ✅ 已完成（提交 d30cd72，验收通过） |
 | human_machine_compare（人机对比月报） | 分析引擎 + 报告生成器 | ✅ 已编码（2026-08-07，基于合成数据）；真实月报待 human_override_log 积累 |
 
-**全量测试：300 tests OK（skipped=2）**（阶段二 277 + 阶段三新增 23）。
+**全量测试：331 tests OK（skipped=2）**（阶段二 277 + 阶段三新增 23 + human_machine_compare 新增 31）。
 
 ## 阶段三交付总结
 
@@ -47,19 +47,17 @@
 - 新输出全 ASCII，零中文策略名；`approval_policy="REFERENCE_ONLY"` 由决策包承载；
   param_sweep 只写 B `reports/`，不写共享目录、不写 A。
 
-## 联调准备（共享目录就绪后执行）
+## 联调结果（M3，2026-08-07 已通过）
 
-当前共享目录 `D:\FF Project\data\integration\` **尚未创建**（A 侧未建），无需立即执行真实写入。
-待 A 侧创建后按以下步骤验证：
-
-1. 运行 `scripts/run_reference_pipeline.py --include-stress --real`（非 dry-run）。
-2. 确认 `systemB_ref/{YYYYMMDD}/` 目录结构完整，含 `.ready` + `package.json` + 全部 5 个产出文件
-   （`decision_ref_package.json` / `assets_metadata.csv` / `grid_reference_table.csv` /
-   `macro_hedge_efficiency.parquet` / `b_heartbeat.json`）。
-3. 确认 `b_heartbeat.json` 已更新（`last_seen` 为当前时间）。
-4. 到 A 侧确认 `integration_reader.read_decision_package()` 可读取并回写 SUCCESS 回执
-   （`systemA_feedback/consumed_{日期}.json`）。
-5. 若 `read_decision_package()` 返回 None，检查 A 侧日志，定位问题后反馈。
+- 共享目录 `D:\FF Project\data\integration\` 由 B 侧 `--real` 触发 `ensure_root()` 兜底创建。
+- A 读端完整消费 `systemB_ref/20260807/`，`consumed_20260807.json` SUCCESS 回执已写入
+  `systemA_feedback/`（B 只写不读）。
+- 联调发现并修复：`run_reference_pipeline.py` `--real` 分支漏传 `include_stress`（提交 `2c10c0b`），
+  重跑后 14/14 资产 macro_stress 全覆盖。
+- 真实写入产物：`systemB_ref/20260807/` 含 `.ready` + `package.json` + 4 数据文件 +
+  根级 b_heartbeat.json + manifest.json + backup/；verify.ok=True。
+- **A 侧审核工作台已上线**（2026-08-07，A PR #2 合并 179bf52）：B 字段 macro_regime.phase /
+  asset.red_flag / macro_stress 完整接入展示；红牌拦截验证通过（red 红牌弹窗拦截 + 人工确认）。
 
 ## 纪律重申（不可违反）
 
@@ -86,10 +84,16 @@
 - 口径调整（相对设计文档 §3.3）：「macro_stress 无显著压力」是**不看空**而非看多，避免无压力资产
   全部看多、一致率虚高；信号矛盾（多空同时触发）→ neutral 不硬判。
 
-## 下一步
+## 下一步（两项目协同节奏）
 
-- **联调（M3）已通过**（2026-08-07）：A 已消费 `systemB_ref/20260807/` 并回执 SUCCESS；
-  A 侧下一步 `read_with_audit()` 接入生产（日更/状态页）+ 审核工作台设计。
-- **human_machine_compare 真实月报**：触发条件 `human_override_log` 达 **≥30 条且覆盖 ≥3 策略**
-  （约 2026-11 后评估）→ 直接运行 `scripts/run_human_machine_compare.py --target-month YYYY-MM
-  --package <决策包>` 产出真实月报；分析引擎已就绪，无需再编码。
+| 顺序 | 任务 | 负责方 | 触发条件 |
+|---|---|---|---|
+| 1 | 收集真实干预数据 | A | 日常使用审核工作台，自然累积 `human_override_log` |
+| 2 | 运行 human_machine_compare 真实月报 | B | `human_override_log` **≥30 条且覆盖 ≥3 策略**（当前 4 条，预计 1-2 个月） |
+| 3 | 策略详情制订 | A | 审核工作台运行稳定 + 策略可行性分析启动后 |
+| 4 | 策略参数扫描标准化 | B | A 侧策略详情制订完成，提供需扫描的参数范围 |
+
+- B 侧 human_machine_compare 分析引擎已就绪（`reference/human_machine_compare.py` + CLI），
+  真实月报可随时触发：`scripts/run_human_machine_compare.py --target-month YYYY-MM --package <决策包>`。
+- **唯一阻塞项**：等待 A 侧 `human_override_log` 累积至阈值（≥30 条且覆盖 ≥3 策略）。
+- A 侧审核工作台已上线（179bf52），B 字段已接入展示；B 无需介入，仅响应 A 侧字段需求。
