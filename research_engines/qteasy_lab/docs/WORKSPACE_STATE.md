@@ -80,5 +80,7 @@ stagnation（滞胀，rate_up AND real_yield_up 组合））。仅 `--include-st
 ## 下一步
 
 - `human_machine_compare`（人机对比月报）：依赖 A 侧 `human_override_log` 积累 **≥3 个月**
-  后再启动（当前已存在但仅 2 行）。
-- 与 A 联调：A 建共享目录后跑 `--real` 真实写入 → A 侧确认可读回写 consumed。
+  后再启动（当前仅 4 行）。**前期设计已固化**：`docs/human_machine_compare_design.md`
+  （输出格式 / 口径 / 数据源映射 / 依赖清单 / 监控清单），2026-11 立项时直接参考。
+- 联调已通过（2026-08-07）：A 已消费 `systemB_ref/20260807/` 并回执 SUCCESS；
+  等待 A 侧 `read_with_audit()` 生产接线 + 审核工作台设计。

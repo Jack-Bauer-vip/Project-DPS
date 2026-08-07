@@ -71,5 +71,7 @@
 
 ## 下一步
 
-- **联调（M3）**：等 A 建共享目录 + 读端就绪后执行上述验证流程。
+- **联调（M3）已通过**（2026-08-07）：A 已消费 `systemB_ref/20260807/` 并回执 SUCCESS；
+  A 侧下一步 `read_with_audit()` 接入生产（日更/状态页）+ 审核工作台设计。
 - **human_machine_compare**：等 A 侧 `human_override_log` 积累 ≥3 个月（2026 年 11 月后评估）。
+  前期设计已固化：`docs/human_machine_compare_design.md`（输出格式/口径/数据源映射/依赖清单/监控清单）。
