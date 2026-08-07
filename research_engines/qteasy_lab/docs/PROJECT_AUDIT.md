@@ -265,6 +265,17 @@ D:\FF Project\data\integration\           ← 根目录：系统A新建（B 自�
 | `reference/human_machine_compare.py` | 月度人机对比（A 实际交易 vs B 参考维度）月报 |
 | 版本回滚 | `shared_dir.rollback_to()` 从 `backup/` 恢复 |
 
+#### 阶段二 / 三实施状态追踪（2026-08-07 更新）
+
+| 模块 | 立项批次 | 状态 | 交付说明 |
+|------|----------|------|----------|
+| `reference/duration_phase.py` | 阶段二 | ✅ 已完成 | 9 状态连续月数 + `phase`（early/mid/late），并入 `macro_regime`（提交 0ac463a） |
+| `reference/red_flag.py` | 阶段二 | ✅ 已完成 | 逐资产红/橙/黄，镜像 A 回撤/波动率口径，`approval_required = true`（提交 0ac463a） |
+| 版本回滚 | 阶段二 | ✅ 已完成 | `rollback_to()` 启用 + `backup/` 按 run_id 保留最近 30 版 + manifest 同步修剪（提交 0ac463a） |
+| `reference/stress_simulator.py` | 阶段三 | ✅ 已完成 | 5 情景历史回放损益（rate_up_50bp / rate_down_50bp / curve_inverted / real_yield_up / 滞胀组合），填充 `asset.macro_stress`；样本 <5 降级 None + low 不虚构（提交 d30cd72） |
+| `reference/param_sweep.py` | 阶段三 | ✅ 已完成 | 间距网格扫描 + 换手/成本评估；独立 CLI（`run_param_sweep.py`），只写 B `reports/param_sweep/`，不进每日决策包（提交 d30cd72） |
+| `reference/human_machine_compare.py` | 阶段三 | ⏳ 延后 | 月度人机对比月报；依赖 A 侧 `human_override_log` 积累 ≥3 个月（当前仅 2 行），建议 2026 年 11 月后评估立项 |
+
 ---
 
 < PAGEBREAK >
