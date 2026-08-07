@@ -79,3 +79,45 @@ A 侧定义契约格式时建议采用以下字段命名与类型（B 侧读端�
 - 严禁读取/修改 `systemA_feedback/`（M-003）。
 - 每次 `--real` 运行带 `--include-stress`（`2c10c0b` 已生效）。
 - 机器产出全 ASCII，`strategy_id`/`asset_id` 标识，零中文策略名。
+
+## 7. A 侧 PR #3 契约 v1.0 审阅记录（2026-08-07）
+
+**审阅对象**：A PR #3（`feature/strategy-contract`）→ `data/integration/strategy_contracts/strategy_contract.json`
+schema v1.0（`src/strategy_contract.py` + `docs/integration/strategy_contract_设计_20260807.md`）。
+
+**结论：契约 schema 可用（可合并）**，核心字段满足 B 侧回测引擎输入需求；附 3 条非阻塞建议。
+
+### 7.1 审阅清单逐项核对
+
+| 检查项 | B 侧基线要求 | A 实际 v1.0 | 判定 |
+|---|---|---|---|
+| decision_rule 枚举 | barbell/mid_line/grid/short_term | 5 枚举：mid_line/short_term/grid/barbell/**defensive** | ✅ 通过（超集） |
+| rebalance_frequency 枚举 | daily/weekly/monthly/quarterly/never | 仅 **weekly/daily** | ⚠️ 值域缩窄，需确认 |
+| signal_filters 结构 | `{field, operator, value}` | 预留 `null`（结构未定义） | ⚠️ 当前无需求，未来 1.1 约定 |
+| min_weight/max_weight 映射 | dict[asset_id, float] | 内嵌 `assets[].min_weight/target_weight/max_weight` + `target_weight_configured` | ✅ 通过（结构不同但更优） |
+| 类型匹配 | 与回测引擎预期一致 | preferences 解析后 dict / enabled bool / backtest 成本 / 带时区 ISO | ✅ 通过 |
+
+### 7.2 A 实际 schema（与基线草案差异）
+
+- `target_weights` dict → 改为 `assets[].target_weight` + `target_weight_configured`（`false`=系统计算目标）。
+- `pref_*` 前缀 → `preferences`（解析后 dict，5 键可负，如 volatility=-0.3）。
+- 顶层含 `contract_type`/`generated_at`(带 +08:00 时区)/`generated_by`；`shared_config` 含
+  adj_type/backtest/signal_thresholds/risk_thresholds/short_term_score_params/position_limits。
+- B 侧回测引擎读取方式：`strategies[]` 按 strategy_id 遍历 → `assets[]` 按 asset_id 遍历，
+  **不再用 dict 映射**；`enabled=false` 的策略/标的需过滤。
+
+### 7.3 非阻塞建议（回测引擎开发前需确认，不阻塞 PR 合并）
+
+1. **`rebalance_frequency` 值域**：A 仅导出 weekly/daily，缺 monthly/quarterly/never。请 A 确认未来
+   是否会出现这些值；B 侧引擎将容忍未知值并按 `use_target_ratio` + `rebalance_threshold_abs`
+   （策略级）/ `asset_rebalance_threshold_abs`（标的级）触发再平衡。
+2. **`target_weight_configured=false` 推导口径**：A 未定义"系统计算目标"的推导规则，B 侧无法独立复现。
+   当前阶段建议：B 侧对这些标的按 `target_weight=null` 处理（不虚构权重），或 A 明确推导口径后固化。
+3. **`signal_filters` 结构**：当前 null。未来 schema 1.1 填充时建议按 B 侧基线
+   `{"field": "<B维度>", "operator": "<eq/neq/gt/lt>", "value": "<值>"}` 结构约定
+   （如 `{"field": "macro_regime.phase", "operator": "neq", "value": "late"}`），避免再次对齐成本。
+
+### 7.4 触发条件更新
+
+任务 1「读取策略规则契约」与任务 2「策略级别回测引擎开发」的**触发条件已满足**（A 契约 v1.0 已产出），
+B 侧可进入引擎开发；开发启动仍需人工裁定（当前不编码）。
