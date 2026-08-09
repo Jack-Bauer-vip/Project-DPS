@@ -528,6 +528,46 @@ class GridRuleTests(unittest.TestCase):
         spread, source = resolve_grid_spread("159985.SZ", None, loaded)
         self.assertEqual(source, "fallback")
 
+    def test_grid_listing_after_start_buys_to_center(self):
+        """上市晚于回测起点的标的：上市日按中枢 max×0.5 建仓（T+1 成交）并初始化锚价。"""
+        temp = tempfile.TemporaryDirectory()
+        root = Path(temp.name)
+        contract = parse_contract(_write_contract(root))
+        dates = pd.date_range("2024-01-02", periods=40, freq="B")
+        frames = {
+            "159985.SZ": pd.DataFrame({
+                "trade_date": dates.strftime("%Y-%m-%d"),
+                "close": [1.0 * (1.0 + 0.0005 * j) for j in range(40)],
+            }),
+            # 513520.SH 前半段无行情（上市日晚于回测起点）。
+            "513520.SH": pd.DataFrame({
+                "trade_date": dates[20:].strftime("%Y-%m-%d"),
+                "close": [1.2 * (1.0 + 0.0005 * j) for j in range(20)],
+            }),
+        }
+        _write_fund_daily(root, frames)
+        result = run_backtest(
+            next(s for s in contract.strategies if s.decision_rule == "grid"),
+            contract,
+            data_root=root,
+            start="2024-01-02",
+            lot=1,
+            online_ok=False,
+            phase_lookup={},
+            grid_reference={},
+        )
+        self.assertEqual(result.status, "OK")
+        buys = result.trades[
+            (result.trades["asset_id"] == "513520.SH")
+            & (result.trades["side"] == "BUY")
+        ]
+        self.assertFalse(buys.empty, "上市晚的标的应在上市日建仓")
+        # 上市日 = 2024-01-30；T 收盘信号 → T+1 成交 2024-01-31。
+        self.assertEqual(buys.iloc[0]["trade_date"], "2024-01-31")
+        # 中枢 = max×0.5：0.1347×0.5×100000 / close(≈1.2) ≈ 5600 股。
+        self.assertGreater(buys.iloc[0]["shares"], 5000)
+        self.assertLess(buys.iloc[0]["shares"], 6200)
+
 
 class MacroAdaptationTests(unittest.TestCase):
     def test_apply_filters_none_pass(self):

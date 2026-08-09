@@ -1160,10 +1160,19 @@ def _grid_signal(
     orders: list[dict[str, Any]] = []
     asset_map = _asset_map(strategy)
     for asset_id in positions:
-        if asset_id not in grid_anchor:
-            continue
         close = _close_at(prices.loc[date], asset_id)
         if close is None or close <= 0:
+            continue
+        if asset_id not in grid_anchor:
+            # 上市晚于回测起点的标的：上市当日按中枢 max×0.5 建仓（先验），
+            # 并初始化锚价 = 当日收盘；当日不触发档位信号，次日进入档位交易。
+            # （修复：此前 grid_anchor 仅回测首日初始化，上市晚的标的永不触网。）
+            grid_anchor[asset_id] = close
+            grid_index[asset_id] = 0
+            target_notional = grid_target_weight(asset_map[asset_id]) * cash
+            shares = round_lot(target_notional / close, lot)
+            if shares > 0:
+                orders.append({"asset_id": asset_id, "side": "BUY", "shares": shares})
             continue
         anchor = grid_anchor[asset_id]
         spread = grid_spreads.get(asset_id, DEFAULT_GRID_SPREAD)
