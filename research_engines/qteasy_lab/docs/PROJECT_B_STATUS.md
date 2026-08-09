@@ -15,17 +15,20 @@
 | human_machine_compare 编码 | 分析引擎 + CLI + 合成数据测试（0f0a7f8） |
 | human_machine_compare 设计文档 | docs/human_machine_compare_design.md |
 | 联调修复 | --real 漏传 include_stress 已修复（2c10c0b） |
-| 策略级别回测引擎 | 轻量事件驱动模拟器 + CLI + 报告三件套（reports/backtest/）+ 46 引擎测试 |
+| 策略级别回测引擎 | 轻量事件驱动模拟器 + CLI + 报告三件套（reports/backtest/）+ 47 引擎测试 |
+| 回测补充产出 | per-asset 归因 + 网格触网汇总（run_backtest_supplements.py，A 侧确认清单响应）+ Bug#6 网格修复 |
+| 宏观监控框架设计文档 | docs/macro_monitoring_framework_design.md（三剑客/全球配置：适配月报/相关性/极端情景，设计不编码） |
 
 
 ## 二、当前待办
 
 | 优先级 | 任务 | 状态 | 触发条件 |
 |---|---|---|---|
-| 1 | 策略级别回测引擎 | ✅ 已交付（开发 + 端到端验证） | — |
-| 2 | 参数扫描扩展 | ⬜ 待启动 | A侧策略详情制订完成 |
-| 3 | 因子有效性回溯测试 | ⬜ 待启动 | B数据包连续运行≥1个月 + A侧策略详情 |
-| 4 | human_machine_compare 真实月报 | ⬜ 等待触发 | human_override_log ≥30条且≥3策略 |
+| 1 | 策略级别回测引擎 | ✅ 已交付（开发 + 端到端验证 + 补充产出） | — |
+| 2 | 宏观监控框架实现 | ⬜ 待启动 | A侧策略详情制订完成（设计文档 docs/macro_monitoring_framework_design.md 已就绪） |
+| 3 | 参数扫描扩展 | ⬜ 待启动 | A侧策略详情制订完成 |
+| 4 | 因子有效性回溯测试 | ⬜ 待启动 | B数据包连续运行≥1个月 + A侧策略详情 |
+| 5 | human_machine_compare 真实月报 | ⬜ 等待触发 | human_override_log ≥30条且≥3策略 |
 
 
 ## 三、当前阻塞
