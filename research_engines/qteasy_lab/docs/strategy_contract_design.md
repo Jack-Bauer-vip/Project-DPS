@@ -121,3 +121,10 @@ schema v1.0（`src/strategy_contract.py` + `docs/integration/strategy_contract_�
 
 任务 1「读取策略规则契约」与任务 2「策略级别回测引擎开发」的**触发条件已满足**（A 契约 v1.0 已产出），
 B 侧可进入引擎开发；开发启动仍需人工裁定（当前不编码）。
+
+**2026-08-09 更新：任务 2 已交付**。策略级别回测引擎（轻量事件驱动模拟器）已开发完成并通过
+端到端验证：6 策略 = 5 OK（barbell_strategy / global_allocation / grid_lh / grid_scz /
+three_musketeers）+ 1 SKIPPED（short_stock_placeholder，标的 disabled）。CLI `scripts/run_backtest.py`
+只读本契约 + B 本地 data/，只写 `reports/backtest/` 三件套。真实数据回测中 5 处正确性修复
+（weekly 重平衡跨年、首日建仓审计、权重基准含现金、后复权除权、停牌 ffill），46 项引擎测试全绿。
+A 侧可按需要请求各策略回测报告。

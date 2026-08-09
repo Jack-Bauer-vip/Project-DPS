@@ -55,6 +55,14 @@ BENCHMARKS = {
     "gold": "GLD",
 }
 
+# ---- 阶段四：策略契约回测 ----
+# A 侧策略规则契约（B 只读，绝不写入/修改）。
+STRATEGY_CONTRACT_PATH = INTEGRATION_DIR / "strategy_contracts" / "strategy_contract.json"
+# B 侧回测报告输出目录（只写 B 本地 reports/）。
+BACKTEST_REPORT_DIR = PROJECT_ROOT / "reports" / "backtest"
+# B 侧网格参考表（dry-run 产物 outputs/），网格档距三级取值的第二级来源。
+GRID_REFERENCE_PATH = OUTPUT_DIR / "grid_reference_table.csv"
+
 # ---- 阶段三：压力模拟器情景幅度 ----
 # DGS30 月变化 ≥ +0.50（50bp）视为强加息压力（rate_up 的 states 判定是 ≥+0.20，即 20bp）。
 STRESS_RATE_UP_BP = 0.50

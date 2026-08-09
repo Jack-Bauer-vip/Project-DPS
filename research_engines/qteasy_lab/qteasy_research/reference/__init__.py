@@ -7,11 +7,14 @@
 from __future__ import annotations
 
 from qteasy_research.reference.config import (
+    BACKTEST_REPORT_DIR,
     BENCHMARKS,
     DATA_ASOF_MAX_AGE_DAYS,
+    GRID_REFERENCE_PATH,
     HEARTBEAT_MAX_AGE_DAYS,
     INTEGRATION_DIR,
     OUTPUTS_DIR,
+    STRATEGY_CONTRACT_PATH,
     SYSTEM_A_ROOT,
 )
 from qteasy_research.reference.duration_phase import build_duration_phase
@@ -63,8 +66,9 @@ from qteasy_research.reference.volatility_cone import (
 
 __all__ = [
     # config 常量
-    "BENCHMARKS", "DATA_ASOF_MAX_AGE_DAYS", "HEARTBEAT_MAX_AGE_DAYS",
-    "INTEGRATION_DIR", "OUTPUTS_DIR", "SYSTEM_A_ROOT",
+    "BACKTEST_REPORT_DIR", "BENCHMARKS", "DATA_ASOF_MAX_AGE_DAYS",
+    "GRID_REFERENCE_PATH", "HEARTBEAT_MAX_AGE_DAYS",
+    "INTEGRATION_DIR", "OUTPUTS_DIR", "STRATEGY_CONTRACT_PATH", "SYSTEM_A_ROOT",
     # duration_phase（阶段二）
     "build_duration_phase",
     # grid_reference（B1-1）
