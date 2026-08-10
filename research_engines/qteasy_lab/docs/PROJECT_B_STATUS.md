@@ -1,6 +1,6 @@
 # 项目B · 执行状态
 
-> **更新日期**：2026-08-09
+> **更新日期**：2026-08-10
 > **分支**：develop
 
 
@@ -18,6 +18,7 @@
 | 策略级别回测引擎 | 轻量事件驱动模拟器 + CLI + 报告三件套（reports/backtest/）+ 47 引擎测试 |
 | 回测补充产出 | per-asset 归因 + 网格触网汇总（run_backtest_supplements.py，A 侧确认清单响应）+ Bug#6 网格修复 |
 | 宏观监控框架设计文档 | docs/macro_monitoring_framework_design.md（三剑客/全球配置：适配月报/相关性/极端情景，设计不编码） |
+| 宏观监控框架实现 | M1 适配月报 / M2 相关性 / M3 极端情景韧性（`reference/macro_monitoring.py` + `scripts/run_macro_monitoring.py`，reports/macro_monitoring/，17 新增测试；触发：A 侧策略详情就绪 NOTICE_20260809） |
 
 
 ## 二、当前待办
@@ -25,7 +26,7 @@
 | 优先级 | 任务 | 状态 | 触发条件 |
 |---|---|---|---|
 | 1 | 策略级别回测引擎 | ✅ 已交付（开发 + 端到端验证 + 补充产出） | — |
-| 2 | 宏观监控框架实现 | ⬜ 待启动 | A侧策略详情制订完成（设计文档 docs/macro_monitoring_framework_design.md 已就绪） |
+| 2 | 宏观监控框架实现 | ✅ 已交付（M1/M2/M3 + CLI + 17 测试，reports/macro_monitoring/） | 已触发（A 侧策略详情 NOTICE_20260809 就绪） |
 | 3 | 参数扫描扩展 | ⬜ 待启动 | A侧策略详情制订完成 |
 | 4 | 因子有效性回溯测试 | ⬜ 待启动 | B数据包连续运行≥1个月 + A侧策略详情 |
 | 5 | human_machine_compare 真实月报 | ⬜ 等待触发 | human_override_log ≥30条且≥3策略 |
@@ -61,5 +62,6 @@
 |---|---|
 | human_machine_compare 分析引擎 | ✅ 就绪（可随时运行真实月报，等待数据） |
 | 策略级别回测引擎 | ✅ 已就绪（reports/backtest/，6 策略 = 5 OK + 1 SKIPPED） |
+| 宏观监控框架 | ✅ 已就绪（reports/macro_monitoring/，M1/M2/M3 月度产出，`run_macro_monitoring.py`） |
 | 参数扫描扩展 | ⬜ 等待A侧策略详情 |
 | 因子有效性回溯测试 | ⬜ 等待B数据包积累 + A策略详情 |

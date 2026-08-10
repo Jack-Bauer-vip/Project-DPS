@@ -1,8 +1,9 @@
 # 宏观监控框架设计（三剑客 / 全球配置）
 
-> 设计日期：2026-08-09 ｜ 状态：**设计文档（不编码实现）**
-> 触发：A 侧正在定稿策略可行性分析并启动策略详情制订（预计 1-2 天）；B 侧提前设计
-> 监控输出格式。**待 A 侧策略详情通知后再进入实现阶段**。
+> 设计日期：2026-08-09 ｜ 状态：**已实现（2026-08-10）**
+> 触发：A 侧策略详情就绪（NOTICE_20260809_strategy_details_ready.json），实现
+> `qteasy_research/reference/macro_monitoring.py` + `scripts/run_macro_monitoring.py`，
+> 产出 `reports/macro_monitoring/`（M-003 只写 B 本地 reports/），17 新增测试全绿。
 >
 > **核心边界（纪律）**：本设计只定义**「展示什么」**（输出格式 / 字段口径 / 文件位置），
 > **不定义「该怎么做」**（不定义决策阈值、调仓规则、买卖建议）。所有展示值均为
@@ -195,7 +196,7 @@ Markdown 摘要中对应高相关对**加粗/标红**（`**0.82**`），阈值 0
 | 产出 | 路径 | 说明 |
 |---|---|---|
 | 设计文档 | `docs/macro_monitoring_framework_design.md` | 本文档 |
-| 实现脚本（待 A 通知后） | `scripts/run_macro_monitoring.py` | 仿 `run_backtest.py` 模式 |
+| 实现脚本 | `scripts/run_macro_monitoring.py` + `reference/macro_monitoring.py` | 已实现（2026-08-10），仿 `run_backtest.py` 模式 |
 | 监控产出 | `reports/macro_monitoring/` | 全部 CSV/MD（M-003：只写 B 本地 reports/） |
 
 **编码纪律**：机器产出全 ASCII，`strategy_id`/`asset_id` 标识，零中文策略名；

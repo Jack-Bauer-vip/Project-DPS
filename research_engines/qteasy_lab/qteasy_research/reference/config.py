@@ -60,6 +60,8 @@ BENCHMARKS = {
 STRATEGY_CONTRACT_PATH = INTEGRATION_DIR / "strategy_contracts" / "strategy_contract.json"
 # B 侧回测报告输出目录（只写 B 本地 reports/）。
 BACKTEST_REPORT_DIR = PROJECT_ROOT / "reports" / "backtest"
+# B 侧宏观监控输出目录（M1/M2/M3，只写 B 本地 reports/，M-003）。
+MACRO_MONITOR_DIR = PROJECT_ROOT / "reports" / "macro_monitoring"
 # B 侧网格参考表（dry-run 产物 outputs/），网格档距三级取值的第二级来源。
 GRID_REFERENCE_PATH = OUTPUT_DIR / "grid_reference_table.csv"
 
