@@ -19,6 +19,7 @@
 | 回测补充产出 | per-asset 归因 + 网格触网汇总（run_backtest_supplements.py，A 侧确认清单响应）+ Bug#6 网格修复 |
 | 宏观监控框架设计文档 | docs/macro_monitoring_framework_design.md（三剑客/全球配置：适配月报/相关性/极端情景，设计不编码） |
 | 宏观监控框架实现 | M1 适配月报 / M2 相关性 / M3 极端情景韧性（`reference/macro_monitoring.py` + `scripts/run_macro_monitoring.py`，reports/macro_monitoring/，17 新增测试；触发：A 侧策略详情就绪 NOTICE_20260809） |
+| 阶段一 factor_tear.py（alphalens 借鉴） | `reference/factor_tear.py`（IC 分布/分位收益/因子衰减/turnover 四类 tear sheet，复用 `evaluate_factor_effectiveness`）+ 因子链路覆盖扩展到全部 14 active ETF（`data_market_daily` + 4 因子 Parquet，2026-08-11） |
 
 
 ## 二、当前待办
@@ -30,7 +31,7 @@
 | 3 | 参数扫描扩展 | ⬜ 待启动 | A侧策略详情制订完成 |
 | 4 | 因子有效性回溯测试 | ⬜ 待启动 | B数据包连续运行≥1个月 + A侧策略详情 |
 | 5 | human_machine_compare 真实月报 | ⬜ 等待触发 | human_override_log ≥30条且≥3策略 |
-| 6 | 实现 factor_tear.py（参考 alphalens 计算逻辑，不直接引入依赖；验证后再评估是否正式引入 alphalens） | ⬜ 待启动 | B数据包连续运行≥1个月（预计~2周后，与#4同条件，可并入因子有效性回溯测试） |
+| 6 | 实现 factor_tear.py（参考 alphalens 计算逻辑，不直接引入依赖；验证后再评估是否正式引入 alphalens） | ✅ 阶段一已交付（`reference/factor_tear.py` + 14 标的因子链路扩展 + 8 测试，2026-08-11）；阶段二"生产管道健康度验收"待启动 | 已触发（2026-08-11） |
 
 
 ## 三、当前阻塞
