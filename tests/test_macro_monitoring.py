@@ -250,6 +250,15 @@ class CorrelationTests(unittest.TestCase):
             self.assertTrue(summary_p.exists())
             head = matrix_p.read_text(encoding="utf-8").splitlines()[0]
             self.assertIn("window_days=63", head)
+            # 首列表头必须是 asset_id（不能是 #：A 侧以 comment='#' 读取，
+            # 首列名为 # 会被当注释行跳过 → 读入变 Unnamed: 0）。
+            header_line = matrix_p.read_text(encoding="utf-8").splitlines()[1]
+            self.assertTrue(header_line.startswith("asset_id,"),
+                            f"首列表头应为 asset_id: {header_line!r}")
+            # 模拟 A 侧读端（comment='#'）：首列名应为 asset_id 而非 Unnamed。
+            read_back = pd.read_csv(matrix_p, comment="#")
+            self.assertNotIn("Unnamed: 0", read_back.columns)
+            self.assertIn("asset_id", read_back.columns)
 
 
 class StressScenarioTests(unittest.TestCase):

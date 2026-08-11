@@ -158,3 +158,93 @@ class IntegrationDirTests(unittest.TestCase):
         self.assertEqual(len(receipts), 1)
         self.assertEqual(receipts[0]["by"], "systemA")
         self.assertEqual(self.integration.list_consumed(), receipts)  # 无副作用（只读）
+
+    # ---- 阶段四：月度宏观监控发布（newest_macro_monitoring_run 独立） ----
+
+    def _write_source_files(self, source: Path) -> None:
+        source.mkdir(parents=True, exist_ok=True)
+        (source / "202607_correlation_matrix.csv").write_text(
+            "# schema_version=1.0; data_asof=2026-07-31\n"
+            "asset_id,159131.SZ\n159131.SZ,1.0\n",
+            encoding="utf-8",
+        )
+        (source / "202607_stress_scenarios.md").write_text(
+            "# Stress Scenario Resilience Simulation\n", encoding="utf-8",
+        )
+
+    def _publish_macro(self, run_id: str, *, generated_date: str = "2026-08-10") -> dict:
+        source = self.root / "macro_reports"
+        self._write_source_files(source)
+        return self.integration.publish_run(
+            run_id, source,
+            subdir="macro_monitoring",
+            data_asof="2026-07-31",
+            generated_date=generated_date,
+            cadence="monthly",
+            package_kind="macro_monitoring",
+        )
+
+    def test_publish_run_monthly_macro_keeps_newest_run(self) -> None:
+        """月度宏观包 run 更新独立顶层字段，newest_run 保持日度不变。"""
+        self._write_run("20260807", "2026-08-07")
+        self._publish_macro("20260810")
+        manifest = self.integration.get_manifest()
+        self.assertEqual(manifest["newest_run"], "20260807",
+                         "newest_run 必须保持日度最新不变，不被月度宏观包顶掉")
+        self.assertEqual(manifest["newest_macro_monitoring_run"], "20260810")
+        self.assertIn("20260810", manifest["runs"])
+        self.assertEqual(manifest["runs"]["20260810"]["cadence"], "monthly")
+        self.assertEqual(manifest["runs"]["20260810"]["package_kind"], "macro_monitoring")
+
+    def test_publish_run_byte_copy_verify_backup(self) -> None:
+        """字节级复制 + package.json 子目录前缀 + verify_run 支持子目录 + backup。"""
+        record = self._publish_macro("20260810")
+        self.assertEqual(record["status"], "READY")
+        run_dir = self.root / "systemB_ref" / "20260810"
+        target = run_dir / "macro_monitoring" / "202607_correlation_matrix.csv"
+        self.assertTrue(target.exists())
+        self.assertEqual(
+            target.read_bytes(),
+            (self.root / "macro_reports" / "202607_correlation_matrix.csv").read_bytes(),
+            "发布文件必须字节级一致（sha256 应等于来源文件）",
+        )
+        # package.json：cadence/package_kind + files[] 带 subdir 前缀。
+        package = json.loads((run_dir / "package.json").read_text(encoding="utf-8"))
+        self.assertEqual(package["cadence"], "monthly")
+        self.assertEqual(package["package_kind"], "macro_monitoring")
+        names = [f["name"] for f in package["files"]]
+        self.assertIn("macro_monitoring/202607_correlation_matrix.csv", names)
+        self.assertIn("macro_monitoring/202607_stress_scenarios.md", names)
+        # verify_run 支持子目录（files[].name 带 / 前缀）→ ok。
+        report = self.integration.verify_run("20260810")
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["file_count"], 2)
+        # backup 复制整个 run 目录（含子目录 + .ready）。
+        backup = self.integration.backup_run("20260810")
+        self.assertTrue((backup / "macro_monitoring" / "202607_stress_scenarios.md").exists())
+        self.assertTrue((backup / ".ready").exists())
+        self.assertTrue((backup / "package.json").exists())
+
+    def test_publish_run_keeps_notice_unlisted(self) -> None:
+        """既存 NOTICE 保留不动，不进 package.json files[]。"""
+        run_dir = self.root / "systemB_ref" / "20260810"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        notice = run_dir / "NOTICE_macro_monitoring_ready.json"
+        notice.write_text('{"status": "ready"}', encoding="utf-8")
+        self._publish_macro("20260810")
+        self.assertTrue(notice.exists(), "NOTICE 必须保留")
+        package = json.loads((run_dir / "package.json").read_text(encoding="utf-8"))
+        names = [f["name"] for f in package["files"]]
+        self.assertNotIn("NOTICE_macro_monitoring_ready.json", names,
+                         "NOTICE 不得进 package.json files[]")
+
+    def test_prune_recomputes_newest_macro(self) -> None:
+        """备份修剪删除最新宏观包时，newest_macro_monitoring_run 回退到剩余最大值。"""
+        self._publish_macro("20260801", generated_date="2026-08-01")
+        self._publish_macro("20260810")
+        self.integration.backup_run("20260801")
+        self.integration.backup_run("20260810")
+        self.integration._prune_manifest(["20260810"])
+        manifest = self.integration.get_manifest()
+        self.assertEqual(manifest["newest_macro_monitoring_run"], "20260801")
+        self.assertNotIn("20260810", manifest["runs"])
