@@ -197,7 +197,7 @@ class IntegrationDirTests(unittest.TestCase):
         self.assertEqual(manifest["runs"]["20260810"]["package_kind"], "macro_monitoring")
 
     def test_publish_run_byte_copy_verify_backup(self) -> None:
-        """字节级复制 + package.json 子目录前缀 + verify_run 支持子目录 + backup。"""
+        """字节级复制 + package.json 写入子目录 + verify_run/backup 适配新位置。"""
         record = self._publish_macro("20260810")
         self.assertEqual(record["status"], "READY")
         run_dir = self.root / "systemB_ref" / "20260810"
@@ -208,22 +208,27 @@ class IntegrationDirTests(unittest.TestCase):
             (self.root / "macro_reports" / "202607_correlation_matrix.csv").read_bytes(),
             "发布文件必须字节级一致（sha256 应等于来源文件）",
         )
-        # package.json：cadence/package_kind + files[] 带 subdir 前缀。
-        package = json.loads((run_dir / "package.json").read_text(encoding="utf-8"))
+        # 契约 v1.3：宏观包 package.json 写入子目录；run 根 package.json 不产生。
+        macro_package = run_dir / "macro_monitoring" / "package.json"
+        self.assertTrue(macro_package.exists(), "宏观包 package.json 应写入 macro_monitoring/ 子目录")
+        self.assertFalse((run_dir / "package.json").exists(),
+                         "宏观包不得写 run 根 package.json（该位置归日度决策包独占）")
+        package = json.loads(macro_package.read_text(encoding="utf-8"))
         self.assertEqual(package["cadence"], "monthly")
         self.assertEqual(package["package_kind"], "macro_monitoring")
         names = [f["name"] for f in package["files"]]
         self.assertIn("macro_monitoring/202607_correlation_matrix.csv", names)
         self.assertIn("macro_monitoring/202607_stress_scenarios.md", names)
-        # verify_run 支持子目录（files[].name 带 / 前缀）→ ok。
+        # verify_run 校验子目录 package.json（files[].name 带 / 前缀）→ ok。
         report = self.integration.verify_run("20260810")
         self.assertTrue(report["ok"])
         self.assertEqual(report["file_count"], 2)
-        # backup 复制整个 run 目录（含子目录 + .ready）。
+        # backup 复制整个 run 目录（含子目录 + 子目录内 package.json + .ready）。
         backup = self.integration.backup_run("20260810")
         self.assertTrue((backup / "macro_monitoring" / "202607_stress_scenarios.md").exists())
+        self.assertTrue((backup / "macro_monitoring" / "package.json").exists())
         self.assertTrue((backup / ".ready").exists())
-        self.assertTrue((backup / "package.json").exists())
+        self.assertFalse((backup / "package.json").exists())
 
     def test_publish_run_keeps_notice_unlisted(self) -> None:
         """既存 NOTICE 保留不动，不进 package.json files[]。"""
@@ -233,10 +238,44 @@ class IntegrationDirTests(unittest.TestCase):
         notice.write_text('{"status": "ready"}', encoding="utf-8")
         self._publish_macro("20260810")
         self.assertTrue(notice.exists(), "NOTICE 必须保留")
-        package = json.loads((run_dir / "package.json").read_text(encoding="utf-8"))
+        package = json.loads(
+            (run_dir / "macro_monitoring" / "package.json").read_text(encoding="utf-8")
+        )
         names = [f["name"] for f in package["files"]]
         self.assertNotIn("NOTICE_macro_monitoring_ready.json", names,
                          "NOTICE 不得进 package.json files[]")
+
+    def test_publish_run_macro_only_no_root_package(self) -> None:
+        """契约 v1.3：宏观月度包 package.json 写入子目录，run 根 package.json 不产生。"""
+        self._publish_macro("20260810")
+        run_dir = self.root / "systemB_ref" / "20260810"
+        self.assertTrue((run_dir / "macro_monitoring" / "package.json").exists())
+        self.assertFalse((run_dir / "package.json").exists(),
+                         "宏观包不得写 run 根 package.json（该位置归日度决策包独占）")
+        self.assertTrue((run_dir / ".ready").exists(), "run 根 .ready 仍作为完成标记保留")
+
+    def test_publish_run_macro_subdir_keeps_daily_root_package(self) -> None:
+        """同 run 共存：日度 run 根 package.json 不被宏观子目录包覆盖。"""
+        # 日度包先写 run 根 package.json（data_asof=2026-08-10）。
+        self._write_run("20260810", "2026-08-10")
+        # 宏观包再发布到同一 run，package.json 进子目录。
+        self._publish_macro("20260810")
+        run_dir = self.root / "systemB_ref" / "20260810"
+        # run 根 package.json 仍是日度，未被宏观包覆盖。
+        root_pkg = json.loads((run_dir / "package.json").read_text(encoding="utf-8"))
+        self.assertEqual(root_pkg["data_asof"], "2026-08-10")
+        self.assertNotIn("cadence", root_pkg)
+        self.assertNotIn("package_kind", root_pkg)
+        # 宏观 package.json 在子目录。
+        macro_pkg = json.loads(
+            (run_dir / "macro_monitoring" / "package.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(macro_pkg["cadence"], "monthly")
+        self.assertEqual(macro_pkg["package_kind"], "macro_monitoring")
+        # verify_run 同时校验 run 根（日度 2 文件）与子目录（宏观 2 文件）。
+        report = self.integration.verify_run("20260810")
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["file_count"], 4)
 
     def test_prune_recomputes_newest_macro(self) -> None:
         """备份修剪删除最新宏观包时，newest_macro_monitoring_run 回退到剩余最大值。"""

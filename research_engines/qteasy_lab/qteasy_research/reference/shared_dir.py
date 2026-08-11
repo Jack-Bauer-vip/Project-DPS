@@ -174,7 +174,10 @@ class IntegrationDir:
         流程：复制文件 → 逐文件 sha256 → package.json → touch ``.ready`` → 更新 manifest。
 
         - ``subdir`` 非空：文件落在 ``systemB_ref/{run_id}/{subdir}/``，
-          package.json ``files[].name`` 带 ``{subdir}/`` 前缀（``verify_run`` 天然支持子目录）。
+          package.json 也写入 ``systemB_ref/{run_id}/{subdir}/package.json``
+          （契约 v1.3：宏观监控月度包的 package.json 移入子目录；run 根
+          package.json 归日度决策包独占），``files[].name`` 仍带 ``{subdir}/``
+          前缀（``verify_run`` 相对 run 根解析，天然支持子目录）。
         - 目标 run 目录内既有的其他文件（如 NOTICE_*）保留不动，不进 ``files[]``。
         """
         self.ensure_root()
@@ -216,7 +219,10 @@ class IntegrationDir:
             package["cadence"] = cadence
         if package_kind:
             package["package_kind"] = package_kind
-        (run_dir / "package.json").write_text(
+        # 契约 v1.3：subdir 非空时 package.json 写进子目录（run 根 package.json 归日度
+        # 决策包独占）；run 根 .ready 仍作为完成标记保留，NOTICE 文件不动。
+        package_target = target_dir / "package.json" if subdir else run_dir / "package.json"
+        package_target.write_text(
             json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         (run_dir / ".ready").touch()
@@ -241,27 +247,50 @@ class IntegrationDir:
     # ---- 校验 / 备份 ----
 
     def verify_run(self, run_id: str) -> dict[str, Any]:
-        """重算运行目录内文件 sha256 与 package.json 比对，返回校验报告。"""
+        """重算运行目录内文件 sha256 与 package.json 比对，返回校验报告。
+
+        契约 v1.3：run 根 package.json 归日度决策包独占，宏观监控月度包
+        package.json 位于 ``systemB_ref/{run}/{subdir}/package.json``。
+        本方法同时校验 run 根 package.json（若存在）与各子目录 package.json
+        （如 ``macro_monitoring/``）；``files[].name`` 均相对 run 根解析
+        （子目录包也带 ``{subdir}/`` 前缀）。
+        """
         run_dir = self.root / REF_DIR / run_id
         if not run_dir.exists() or not (run_dir / ".ready").exists():
             return {"run_id": run_id, "ok": False, "reason": "运行目录或 .ready 缺失"}
-        package_path = run_dir / "package.json"
-        if not package_path.exists():
+
+        package_paths: list[Path] = []
+        root_package = run_dir / "package.json"
+        if root_package.exists():
+            package_paths.append(root_package)
+        package_paths.extend(sorted(run_dir.glob("*/package.json")))
+        if not package_paths:
             return {"run_id": run_id, "ok": False, "reason": "package.json 缺失"}
-        package = json.loads(package_path.read_text(encoding="utf-8"))
+
         mismatches: list[str] = []
-        for record in package.get("files", []):
-            target = run_dir / record["name"]
-            if not target.exists():
-                mismatches.append(f"{record['name']}: 文件缺失")
+        file_count = 0
+        for package_path in package_paths:
+            try:
+                package = json.loads(package_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                mismatches.append(
+                    f"{package_path.relative_to(run_dir).as_posix()}: package.json 解析失败: {exc}"
+                )
                 continue
-            if _sha256(target) != record["sha256"]:
-                mismatches.append(f"{record['name']}: 校验和不一致")
+            for record in package.get("files", []):
+                file_count += 1
+                target = run_dir / record["name"]
+                if not target.exists():
+                    mismatches.append(f"{record['name']}: 文件缺失")
+                    continue
+                if _sha256(target) != record["sha256"]:
+                    mismatches.append(f"{record['name']}: 校验和不一致")
         return {
             "run_id": run_id,
             "ok": not mismatches,
             "mismatches": mismatches,
-            "file_count": len(package.get("files", [])),
+            "file_count": file_count,
+            "packages": [p.relative_to(run_dir).as_posix() for p in package_paths],
         }
 
     def backup_run(self, run_id: str) -> Path:

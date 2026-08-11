@@ -3,9 +3,11 @@
 职责解耦（保持「生成 reports/（M-003）」与「发布共享目录」分离）：
 - 生成：``scripts/run_macro_monitoring.py`` -> ``reports/macro_monitoring/``（只写 B 本地）。
 - 发布：本脚本把 ``reports/macro_monitoring/`` 的报告文件**字节级复制**进
-  ``systemB_ref/{run_id}/macro_monitoring/``，写 ``package.json``、touch ``.ready``
-  （最后）、``backup_run``、``verify_run``，并更新 manifest 独立顶层字段
-  ``newest_macro_monitoring_run``（``newest_run`` 保持日度不变，不打断 A 侧日度读端）。
+  ``systemB_ref/{run_id}/macro_monitoring/``，写 ``macro_monitoring/package.json``
+  （契约 v1.3：宏观包 package.json 移入子目录，run 根 package.json 归日度决策包独占）、
+  touch run 根 ``.ready``（完成标记）、``backup_run``、``verify_run``，并更新
+  manifest 独立顶层字段 ``newest_macro_monitoring_run``（``newest_run`` 保持日度不变，
+  不打断 A 侧日度读端）。
 
 默认 dry-run：在本地暂存目录完整演练（复制 -> sha256 -> package.json -> .ready ->
 backup -> verify -> manifest），**绝不写共享目录**。``--real`` 才写真实共享目录。
@@ -119,7 +121,9 @@ def _dry_run(
         print(f"[publish_macro][dry-run] staging root: {root}")
         out = _publish(integration, args.run_id, source, subdir, data_asof, generated_date)
         run_dir = integration.root / "systemB_ref" / args.run_id
-        package = json.loads((run_dir / "package.json").read_text(encoding="utf-8"))
+        # 契约 v1.3：宏观包 package.json 在子目录（subdir）内。
+        package_path = run_dir / args.subdir / "package.json" if args.subdir else run_dir / "package.json"
+        package = json.loads(package_path.read_text(encoding="utf-8"))
         print("\n[publish_macro][dry-run] package.json:")
         print(json.dumps(package, ensure_ascii=False, indent=2))
         print("\n[publish_macro][dry-run] verify:")
