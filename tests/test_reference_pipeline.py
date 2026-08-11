@@ -144,6 +144,10 @@ class ReferencePipelineTests(unittest.TestCase):
         first = package["assets"][0]
         self.assertIn("20d", first["volatility"])
         self.assertEqual(first["data_quality"]["quality_level"], "A")
+        # name 规范化：000001.SZ 未命中规范表 → 透传 A 侧 name；164824.SZ 命中 → 覆盖。
+        by_id = {asset["asset_id"]: asset for asset in package["assets"]}
+        self.assertEqual(by_id["000001.SZ"]["name"], "资产A")
+        self.assertEqual(by_id["164824.SZ"]["name"], "印度基金LOF")
         # 心跳
         heartbeat = json.loads((self.root / "integration" / "b_heartbeat.json").read_text(encoding="utf-8"))
         self.assertEqual(heartbeat["status"], "ok")

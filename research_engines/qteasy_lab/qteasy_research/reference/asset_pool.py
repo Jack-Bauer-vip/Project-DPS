@@ -22,6 +22,7 @@ from qteasy_research.pretrade.providers import (
     AkshareProvider,
 )
 from qteasy_research.pretrade.symbols import resolve_identity
+from qteasy_research.reference.asset_names import resolve_display_name
 from qteasy_research.reference.config import SYSTEM_A_ASSET_POOL, SYSTEM_B_DATA_ROOT
 
 
@@ -29,6 +30,9 @@ def read_active_assets(path: str | Path | None = None) -> pd.DataFrame:
     """读 A ``asset_pool.csv``，返回 status=="active" 的行。
 
     返回列：``asset_id, code, name, type, exchange, theme``。
+
+    ``name`` 列做 B 侧展示名规范化：A 侧 name 存在截断/错字，按 ``asset_id``
+    用 ``asset_names.resolve_display_name`` 覆盖为完整正确展示名（不修改 A 配置）。
     """
     csv_path = Path(path) if path else SYSTEM_A_ASSET_POOL
     if not csv_path.exists():
@@ -43,6 +47,10 @@ def read_active_assets(path: str | Path | None = None) -> pd.DataFrame:
     for column in columns:
         if column not in active.columns:
             active[column] = None
+    active["name"] = [
+        resolve_display_name(str(asset_id).strip(), name)
+        for asset_id, name in zip(active["asset_id"], active["name"])
+    ]
     return active[columns].reset_index(drop=True)
 
 

@@ -50,6 +50,25 @@ class AssetPoolTests(unittest.TestCase):
         pd.read_csv(self.root / "asset_pool.csv").assign(status="inactive").to_csv(inactive, index=False)
         self.assertEqual(len(read_active_assets(inactive)), 0)
 
+    def test_read_active_assets_overrides_truncated_names(self) -> None:
+        # A 侧 name 截断/错字时，read_active_assets 按 asset_id 覆盖为规范展示名。
+        pool = self.root / "pool_truncated.csv"
+        pd.DataFrame({
+            "asset_id": ["562800.SH", "159985.SZ", "513650.SH", "000001.SZ"],
+            "code": ["562800", "159985", "513650", "000001"],
+            "name": ["稀有金属ETF嘉", "豆柏ETF华夏", "标普500ETF南", "平安银行"],
+            "type": ["fund", "fund", "fund", "stock"],
+            "exchange": ["SH", "SZ", "SH", "SZ"],
+            "theme": ["a", "b", "c", "d"],
+            "status": ["active", "active", "active", "active"],
+        }).to_csv(pool, index=False)
+        assets = read_active_assets(pool)
+        by_id = {row["asset_id"]: row["name"] for _, row in assets.iterrows()}
+        self.assertEqual(by_id["562800.SH"], "稀有金属ETF嘉实")
+        self.assertEqual(by_id["159985.SZ"], "豆粕ETF华夏")   # 错字修正
+        self.assertEqual(by_id["513650.SH"], "标普500ETF南方")  # 缺"方"补齐
+        self.assertEqual(by_id["000001.SZ"], "平安银行")       # 未命中规范表 → 透传
+
     def test_read_active_assets_missing_file(self) -> None:
         with self.assertRaises(FileNotFoundError):
             read_active_assets(self.root / "absent.csv")
