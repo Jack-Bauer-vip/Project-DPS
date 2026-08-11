@@ -589,10 +589,12 @@ def write_correlation(
     summary_path = root / f"{ym}_correlation_summary.md"
 
     # 主矩阵 CSV：行列对称；参考列附加（asset_id 行 + 基底三列）。
+    # 首列表头用 asset_id（而非 #）：A 侧以 comment='#' 读取，首列名为 # 会被
+    # 误当注释行跳过（读入变 Unnamed: 0），改为 asset_id 后首行即表头。
     combined = matrix.copy()
     for ref_col in reference.columns:
         combined[f"{ref_col} (base)"] = reference[ref_col]
-    combined = combined.reset_index().rename(columns={"index": "#"})
+    combined = combined.reset_index().rename(columns={"index": "asset_id"})
 
     header_matrix = build_header(
         generated_date=today_iso(), data_asof=data_asof,
