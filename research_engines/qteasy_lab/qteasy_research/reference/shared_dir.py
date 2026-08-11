@@ -89,11 +89,18 @@ class IntegrationDir:
         generated_date: str,
         schema_version: str = SCHEMA_VERSION,
         warnings: list[str] | None = None,
+        cadence: str | None = None,
+        package_kind: str | None = None,
     ) -> dict[str, Any]:
         """写入一次运行包。
 
         ``payloads``: {文件名 → DataFrame / dict}，按后缀写 CSV / parquet / JSON。
         流程：写数据文件 → 逐文件 sha256 → package.json → touch ``.ready`` → 更新 manifest。
+
+        ``cadence``/``package_kind``：月度宏观监控包（``cadence=monthly`` +
+        ``package_kind=macro_monitoring``）的 run 记入独立顶层
+        ``newest_macro_monitoring_run``，绝不顶掉日度 ``newest_run``（见
+        ``_update_manifest``）。
         """
         self.ensure_root()
         run_dir = self.root / REF_DIR / run_id
@@ -123,6 +130,10 @@ class IntegrationDir:
             "files": file_records,
             "warnings": warnings or [],
         }
+        if cadence:
+            package["cadence"] = cadence
+        if package_kind:
+            package["package_kind"] = package_kind
         (run_dir / "package.json").write_text(
             json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -136,6 +147,94 @@ class IntegrationDir:
             "backup_path": f"{BACKUP_DIR}/{run_id}",
             "consumed": {"by": "systemA", "at": None},
         }
+        if cadence:
+            record["cadence"] = cadence
+        if package_kind:
+            record["package_kind"] = package_kind
+        self._update_manifest(run_id, record)
+        return record
+
+    def publish_run(
+        self,
+        run_id: str,
+        source_dir: str | Path,
+        *,
+        subdir: str,
+        data_asof: str,
+        generated_date: str,
+        schema_version: str = SCHEMA_VERSION,
+        cadence: str | None = None,
+        package_kind: str | None = None,
+        warnings: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """把预生成的报告文件**字节级复制**到 ``systemB_ref/{run_id}/{subdir}/``。
+
+        与 ``write_run`` 的区别：本方法只复制已生成的字节文件（不重新编码），
+        用于「生成 reports/ 与发布共享目录」解耦的场景（如宏观监控月度包）。
+        流程：复制文件 → 逐文件 sha256 → package.json → touch ``.ready`` → 更新 manifest。
+
+        - ``subdir`` 非空：文件落在 ``systemB_ref/{run_id}/{subdir}/``，
+          package.json ``files[].name`` 带 ``{subdir}/`` 前缀（``verify_run`` 天然支持子目录）。
+        - 目标 run 目录内既有的其他文件（如 NOTICE_*）保留不动，不进 ``files[]``。
+        """
+        self.ensure_root()
+        source = Path(source_dir)
+        if not source.exists() or not source.is_dir():
+            raise FileNotFoundError(f"来源目录不存在：{source}")
+        run_dir = self.root / REF_DIR / run_id
+        target_dir = run_dir / subdir if subdir else run_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        filenames = sorted(p.name for p in source.iterdir() if p.is_file())
+        if not filenames:
+            raise ValueError(f"来源目录无文件：{source}")
+
+        file_records: list[dict[str, Any]] = []
+        checksums: dict[str, str] = {}
+        for name in filenames:
+            dst = target_dir / name
+            shutil.copy2(source / name, dst)
+            checksum = _sha256(dst)
+            rel_name = f"{subdir}/{name}" if subdir else name
+            checksums[rel_name] = checksum
+            file_records.append({
+                "name": rel_name,
+                "format": _format_of(Path(name).suffix),
+                "sha256": checksum,
+            })
+
+        package = {
+            "schema_version": schema_version,
+            "source_system": "systemB",
+            "generated_date": generated_date,
+            "data_asof": data_asof,
+            "pipeline_version": PIPELINE_VERSION,
+            "files": file_records,
+            "warnings": warnings or [],
+        }
+        if cadence:
+            package["cadence"] = cadence
+        if package_kind:
+            package["package_kind"] = package_kind
+        (run_dir / "package.json").write_text(
+            json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        (run_dir / ".ready").touch()
+
+        record = {
+            "generated_date": generated_date,
+            "data_asof": data_asof,
+            "status": "READY",
+            "checksums": checksums,
+            "files": [record["name"] for record in file_records],
+            "subdir": subdir,
+            "backup_path": f"{BACKUP_DIR}/{run_id}",
+            "consumed": {"by": "systemA", "at": None},
+        }
+        if cadence:
+            record["cadence"] = cadence
+        if package_kind:
+            record["package_kind"] = package_kind
         self._update_manifest(run_id, record)
         return record
 
@@ -239,8 +338,20 @@ class IntegrationDir:
         runs = dict(manifest.get("runs", {}))
         runs[run_id] = record
         manifest["runs"] = runs
-        if manifest.get("newest_run") is None or run_id > str(manifest["newest_run"]):
-            manifest["newest_run"] = run_id
+        is_monthly_macro = (
+            record.get("cadence") == "monthly"
+            and record.get("package_kind") == "macro_monitoring"
+        )
+        if is_monthly_macro:
+            # 月度宏观监控 run 只更新独立顶层 newest_macro_monitoring_run，
+            # 绝不顶掉日度 newest_run（避免打断 A 侧日度读端）。
+            if manifest.get("newest_macro_monitoring_run") is None or run_id > str(
+                manifest["newest_macro_monitoring_run"]
+            ):
+                manifest["newest_macro_monitoring_run"] = run_id
+        else:
+            if manifest.get("newest_run") is None or run_id > str(manifest["newest_run"]):
+                manifest["newest_run"] = run_id
         (self.root / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -290,7 +401,9 @@ class IntegrationDir:
         return stale
 
     def _prune_manifest(self, removed: list[str]) -> None:
-        """删除 manifest 中被修剪备份的 run 记录，并修正 ``newest_run``。"""
+        """删除 manifest 中被修剪备份的 run 记录，并修正 ``newest_run`` /
+        ``newest_macro_monitoring_run``（防御：若被删项恰好是最新——正常不会，
+        因只删最旧——则重算剩余最大值）。"""
         manifest = self._load_manifest()
         drop = set(removed)
         runs = {rid: rec for rid, rec in manifest.get("runs", {}).items() if rid not in drop}
@@ -298,6 +411,14 @@ class IntegrationDir:
         newest = manifest.get("newest_run")
         if newest in drop or newest not in runs:
             manifest["newest_run"] = max(runs) if runs else None
+        newest_macro = manifest.get("newest_macro_monitoring_run")
+        if newest_macro in drop or newest_macro not in runs:
+            macro_runs = [
+                rid for rid, rec in runs.items()
+                if rec.get("cadence") == "monthly"
+                and rec.get("package_kind") == "macro_monitoring"
+            ]
+            manifest["newest_macro_monitoring_run"] = max(macro_runs) if macro_runs else None
         (self.root / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -312,4 +433,10 @@ def _sha256(path: Path) -> str:
 
 
 def _format_of(suffix: str) -> str:
-    return {"csv": "csv", "parquet": "parquet", "json": "json"}.get(suffix.lstrip("."), "unknown")
+    return {
+        "csv": "csv",
+        "parquet": "parquet",
+        "json": "json",
+        "md": "markdown",
+        "markdown": "markdown",
+    }.get(suffix.lstrip("."), "unknown")
