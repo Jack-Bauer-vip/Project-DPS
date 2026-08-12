@@ -287,3 +287,92 @@ class IntegrationDirTests(unittest.TestCase):
         manifest = self.integration.get_manifest()
         self.assertEqual(manifest["newest_macro_monitoring_run"], "20260801")
         self.assertNotIn("20260810", manifest["runs"])
+
+    # ---- 契约 v1.4：portfolio_analysis 发布（newest_portfolio_analysis_run 独立） ----
+
+    def _publish_portfolio(self, run_id: str, *, generated_date: str = "2026-08-12") -> dict:
+        source = self.root / "portfolio_reports"
+        source.mkdir(parents=True, exist_ok=True)
+        (source / "portfolio_summary.json").write_text(
+            '{"schema": "portfolio_analysis/1.0", "assets": ["000001.SZ"]}',
+            encoding="utf-8",
+        )
+        return self.integration.publish_run(
+            run_id, source,
+            subdir="portfolio_analysis",
+            data_asof="2026-08-11",
+            generated_date=generated_date,
+            cadence=None,
+            package_kind="portfolio_analysis",
+        )
+
+    def test_publish_portfolio_analysis_keeps_newest_run(self) -> None:
+        """portfolio_analysis 包 run 更新独立顶层字段，newest_run 保持日度不变。"""
+        self._write_run("20260810", "2026-08-10")
+        self._publish_portfolio("20260812")
+        manifest = self.integration.get_manifest()
+        self.assertEqual(manifest["newest_run"], "20260810",
+                         "newest_run 必须保持日度最新不变，不被 portfolio_analysis 包顶掉")
+        self.assertEqual(manifest["newest_portfolio_analysis_run"], "20260812")
+        self.assertIn("20260812", manifest["runs"])
+        record = manifest["runs"]["20260812"]
+        self.assertIsNone(record.get("cadence"))
+        self.assertEqual(record["package_kind"], "portfolio_analysis")
+        self.assertEqual(record["subdir"], "portfolio_analysis")
+
+    def test_publish_portfolio_analysis_writes_subdir_package(self) -> None:
+        """portfolio_analysis 包字节复制到子目录，package.json 写入子目录。"""
+        record = self._publish_portfolio("20260812")
+        self.assertEqual(record["status"], "READY")
+        run_dir = self.root / "systemB_ref" / "20260812"
+        target = run_dir / "portfolio_analysis" / "portfolio_summary.json"
+        self.assertTrue(target.exists())
+        self.assertEqual(
+            target.read_bytes(),
+            (self.root / "portfolio_reports" / "portfolio_summary.json").read_bytes(),
+            "发布文件必须字节级一致",
+        )
+        package = json.loads(
+            (run_dir / "portfolio_analysis" / "package.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(package["package_kind"], "portfolio_analysis")
+        names = [f["name"] for f in package["files"]]
+        self.assertIn("portfolio_analysis/portfolio_summary.json", names)
+        report = self.integration.verify_run("20260812")
+        self.assertTrue(report["ok"])
+
+    def test_publish_daily_still_updates_newest_run_after_portfolio(self) -> None:
+        """回归：日度包 publish 后 newest_run 仍正常更新（即使存在更大的 portfolio run）。"""
+        self._write_run("20260810", "2026-08-10")
+        self._publish_portfolio("20260812")  # 更大的 run_id，但不得占用 newest_run
+        self._write_run("20260811", "2026-08-11")
+        manifest = self.integration.get_manifest()
+        self.assertEqual(manifest["newest_run"], "20260811",
+                         "日度包仍应正常更新 newest_run（与 portfolio run 隔离）")
+        self.assertEqual(manifest["newest_portfolio_analysis_run"], "20260812")
+
+    def test_manifest_three_pointers_isolated(self) -> None:
+        """日度 / 宏观 / portfolio_analysis 三类 run 独立指针，互不干扰。"""
+        self._write_run("20260810", "2026-08-10")          # 日度决策参考包
+        self._publish_macro("20260811")                    # 月度宏观监控包
+        self._publish_portfolio("20260812")                # 组合分析包
+        manifest = self.integration.get_manifest()
+        self.assertEqual(manifest["newest_run"], "20260810")
+        self.assertEqual(manifest["newest_macro_monitoring_run"], "20260811")
+        self.assertEqual(manifest["newest_portfolio_analysis_run"], "20260812")
+        # runs 三条记录，package_kind 各归其位。
+        self.assertEqual(len(manifest["runs"]), 3)
+        self.assertNotIn("package_kind", manifest["runs"]["20260810"])
+        self.assertEqual(manifest["runs"]["20260811"]["package_kind"], "macro_monitoring")
+        self.assertEqual(manifest["runs"]["20260812"]["package_kind"], "portfolio_analysis")
+
+    def test_prune_recomputes_newest_portfolio_analysis(self) -> None:
+        """备份修剪删除最新 portfolio 包时，newest_portfolio_analysis_run 回退到剩余最大值。"""
+        self._publish_portfolio("20260801", generated_date="2026-08-01")
+        self._publish_portfolio("20260810")
+        self.integration.backup_run("20260801")
+        self.integration.backup_run("20260810")
+        self.integration._prune_manifest(["20260810"])
+        manifest = self.integration.get_manifest()
+        self.assertEqual(manifest["newest_portfolio_analysis_run"], "20260801")
+        self.assertNotIn("20260810", manifest["runs"])

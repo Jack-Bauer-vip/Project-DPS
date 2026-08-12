@@ -179,6 +179,9 @@ class IntegrationDir:
           package.json 归日度决策包独占），``files[].name`` 仍带 ``{subdir}/``
           前缀（``verify_run`` 相对 run 根解析，天然支持子目录）。
         - 目标 run 目录内既有的其他文件（如 NOTICE_*）保留不动，不进 ``files[]``。
+        - ``package_kind="portfolio_analysis"`` 的 run（``cadence=None``）记入独立顶层
+          ``newest_portfolio_analysis_run``，绝不顶掉日度 ``newest_run``（契约 v1.4，
+          A 侧 ``read_decision_package()`` 依赖 ``newest_run`` 定位日度决策参考包）。
         """
         self.ensure_root()
         source = Path(source_dir)
@@ -367,9 +370,10 @@ class IntegrationDir:
         runs = dict(manifest.get("runs", {}))
         runs[run_id] = record
         manifest["runs"] = runs
+        package_kind = record.get("package_kind")
         is_monthly_macro = (
             record.get("cadence") == "monthly"
-            and record.get("package_kind") == "macro_monitoring"
+            and package_kind == "macro_monitoring"
         )
         if is_monthly_macro:
             # 月度宏观监控 run 只更新独立顶层 newest_macro_monitoring_run，
@@ -378,6 +382,14 @@ class IntegrationDir:
                 manifest["newest_macro_monitoring_run"]
             ):
                 manifest["newest_macro_monitoring_run"] = run_id
+        elif package_kind == "portfolio_analysis":
+            # 契约 v1.4：portfolio_analysis 包只更新独立顶层
+            # newest_portfolio_analysis_run，绝不顶掉日度 newest_run
+            # （A 侧 read_decision_package() 依赖 newest_run 定位日度决策参考包）。
+            if manifest.get("newest_portfolio_analysis_run") is None or run_id > str(
+                manifest["newest_portfolio_analysis_run"]
+            ):
+                manifest["newest_portfolio_analysis_run"] = run_id
         else:
             if manifest.get("newest_run") is None or run_id > str(manifest["newest_run"]):
                 manifest["newest_run"] = run_id
@@ -448,6 +460,13 @@ class IntegrationDir:
                 and rec.get("package_kind") == "macro_monitoring"
             ]
             manifest["newest_macro_monitoring_run"] = max(macro_runs) if macro_runs else None
+        newest_portfolio = manifest.get("newest_portfolio_analysis_run")
+        if newest_portfolio in drop or newest_portfolio not in runs:
+            portfolio_runs = [
+                rid for rid, rec in runs.items()
+                if rec.get("package_kind") == "portfolio_analysis"
+            ]
+            manifest["newest_portfolio_analysis_run"] = max(portfolio_runs) if portfolio_runs else None
         (self.root / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
         )
