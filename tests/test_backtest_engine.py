@@ -193,6 +193,35 @@ class ContractParseTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             parse_contract(self.root / "missing.json")
 
+    def test_template_account_id_parse(self):
+        """契约 strategy 节点带 template_id/account_id → 透传到 ContractStrategy。"""
+        data = _make_contract_json()
+        data["strategies"][0]["template_id"] = "tpl_barbell"
+        data["strategies"][0]["account_id"] = "acc_001"
+        contract = parse_contract(self._write(data))
+        s = next(s for s in contract.strategies if s.strategy_id == "barbell_strategy")
+        self.assertEqual(s.template_id, "tpl_barbell")
+        self.assertEqual(s.account_id, "acc_001")
+        # 未带这两个字段的策略 → None（可选字段不破坏既有解析）。
+        grid = next(s for s in contract.strategies if s.decision_rule == "grid")
+        self.assertIsNone(grid.template_id)
+        self.assertIsNone(grid.account_id)
+
+    def test_template_account_id_missing_or_wrong_type_none(self):
+        """契约 strategy 节点缺失/类型不对 → None 不抛错（回归）。"""
+        # 缺失（_make_contract_json 默认无这两个字段）→ None。
+        contract = parse_contract(self._write(_make_contract_json()))
+        for s in contract.strategies:
+            self.assertIsNone(s.template_id)
+            self.assertIsNone(s.account_id)
+        # 类型不对（int / dict）→ None 不抛错。
+        data = _make_contract_json()
+        data["strategies"][0]["template_id"] = 123
+        data["strategies"][0]["account_id"] = {"nested": True}
+        contract = parse_contract(self._write(data))
+        self.assertIsNone(contract.strategies[0].template_id)
+        self.assertIsNone(contract.strategies[0].account_id)
+
 
 class LoaderTests(unittest.TestCase):
     def setUp(self) -> None:

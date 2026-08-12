@@ -97,6 +97,9 @@ class ContractStrategy:
     signal_filters: list | None
     preferences: dict
     assets: list[ContractAsset]
+    # 策略模板×实例改造第一刀（schema 1.0 扩展，A 侧可选）：B 侧当前不消费，仅透传承载。
+    template_id: str | None = None
+    account_id: str | None = None
 
     @property
     def enabled_assets(self) -> tuple[str, ...]:
@@ -224,6 +227,13 @@ def _parse_strategy(raw: dict) -> ContractStrategy:
         filters = [dict(item) for item in filters]
     else:
         filters = None  # null → 不过滤
+    # 策略模板×实例扩展字段（schema 1.0 可选）：契约里有就取字符串，缺失/类型不对 → None（不抛错）。
+    template_id = raw.get("template_id")
+    if not isinstance(template_id, str):
+        template_id = None
+    account_id = raw.get("account_id")
+    if not isinstance(account_id, str):
+        account_id = None
     return ContractStrategy(
         strategy_id=str(raw.get("strategy_id", "")),
         decision_rule=str(raw.get("decision_rule", "mid_line")),
@@ -241,6 +251,8 @@ def _parse_strategy(raw: dict) -> ContractStrategy:
         signal_filters=filters,
         preferences=dict(raw.get("preferences", {})),
         assets=assets,
+        template_id=template_id,
+        account_id=account_id,
     )
 
 
