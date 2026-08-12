@@ -44,6 +44,7 @@ def launch() -> int:
     from qteasy_research.desktop.factor_page import FactorResearchPage
     from qteasy_research.desktop.data_page import DataManagementPage
     from qteasy_research.desktop.global_etf_page import GlobalEtfPage
+    from qteasy_research.desktop.portfolio_page import PortfolioPage
     from qteasy_research.pretrade import (
         add_asset_reference,
         add_project_decision,
@@ -155,7 +156,7 @@ def launch() -> int:
             root_layout.setContentsMargins(0, 0, 0, 0)
             nav = QListWidget()
             nav.setObjectName("main-navigation")
-            nav.addItems(["研究项目", "新建研究", "因子研究", "数据管理", "全球ETF宏观", "策略导入", "系统设置"])
+            nav.addItems(["研究项目", "新建研究", "因子研究", "数据管理", "全球ETF宏观", "组合分析", "策略导入", "系统设置"])
             nav.setFixedWidth(190)
             self.pages = QStackedWidget()
             root_layout.addWidget(nav)
@@ -176,9 +177,11 @@ def launch() -> int:
             self.data_page.status_message.connect(lambda message: self.statusBar().showMessage(message))
             self.global_etf_page = GlobalEtfPage(store_dir, parent=self)
             self.global_etf_page.status_message.connect(lambda message: self.statusBar().showMessage(message))
+            self.portfolio_page = PortfolioPage(store_dir, parent=self)
+            self.portfolio_page.status_message.connect(lambda message: self.statusBar().showMessage(message))
             self.strategy_page = self._build_strategy_page()
             self.settings_page = self._build_settings_page()
-            for page in (self.project_page, self.new_page, self.factor_page, self.data_page, self.global_etf_page, self.strategy_page, self.settings_page):
+            for page in (self.project_page, self.new_page, self.factor_page, self.data_page, self.global_etf_page, self.portfolio_page, self.strategy_page, self.settings_page):
                 self.pages.addWidget(page)
             nav.setCurrentRow(0)
 
@@ -1238,6 +1241,7 @@ def launch() -> int:
             self.factor_page.set_store_root(store_dir)
             self.data_page.set_store_root(store_dir)
             self.global_etf_page.set_store_root(store_dir)
+            self.portfolio_page.set_store_root(store_dir)
             save_settings({
                 "store_dir": str(store_dir),
                 "default_horizon": "medium",

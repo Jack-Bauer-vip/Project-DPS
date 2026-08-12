@@ -14,7 +14,9 @@ akshare>=1.18.0
 # 可选依赖
 # PySide6>=6.6          # 原生桌面研究工作台
 # openpyxl>=3.0.0     # Excel 报告生成
-# scipy>=1.10.0       # 风险平价优化
+# scipy>=1.10.0       # 风险平价 SLSQP 优化 + 有效前沿（L3 组合分析用）。
+#                     # 可选：未安装时确定性降级，不影响其它功能——风险平价改走
+#                     # 固定点迭代（+逆波动回退），有效前沿诚实省略（status=degraded）。
 # scikit-learn        # 逻辑回归概率合成
 # reportlab>=4.0.0    # SYSTEM_MANUAL.pdf 生成（scripts/build_system_manual_pdf.py）
 
