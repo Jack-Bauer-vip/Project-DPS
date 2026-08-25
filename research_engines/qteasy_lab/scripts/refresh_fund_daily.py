@@ -54,6 +54,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--codes", default=None,
                         help="逗号分隔标的白名单（默认 = CSV 现有全部 ts_code）")
     parser.add_argument("--data-root", type=Path, default=PROJECT_ROOT / "data", help="B 数据目录")
+    parser.add_argument("--skip-merge-check", dest="skip_merge_check", action="store_true", default=False,
+                        help="跳过新增首日 vs 本地最新衔接校验（回溯补全历史时跨期比较会误报，用本开关）")
     return parser.parse_args()
 
 
@@ -279,11 +281,15 @@ def main(args: argparse.Namespace) -> int:
     print("[校验]")
     for message in messages:
         print(message)
-    if continuity_warnings:
+    if continuity_warnings and not args.skip_merge_check:
         print("[衔接告警]")
         for warning in continuity_warnings:
             print(f"  [告警] {warning}")
         ok = False  # 衔接异常视为脏数据风险，阻断写盘/发包
+    elif continuity_warnings:
+        print("[衔接告警-已跳过] --skip-merge-check（回溯补数，跨期首日比较不适用），仅提示：")
+        for warning in continuity_warnings:
+            print(f"  [提示] {warning}")
 
     if not ok:
         print("[结果] 校验未通过，拒绝写盘（未发包）。")
