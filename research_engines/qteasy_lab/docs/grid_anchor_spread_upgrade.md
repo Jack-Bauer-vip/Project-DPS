@@ -166,3 +166,27 @@ python -m qteasy_research.reference.grid_backtest_eval --asset 513520.SH [--limi
 - `approval_policy="REFERENCE_ONLY"` 永不自动 APPROVED；不改资产池/组合权重/回测配置。
 - 数据不足（ADX 缺 high/low、swing 缺 200d 窗口、ATR 缺历史）→ 诚实降级 unknown/None/缺失，不把缺失当中性。
 - 回测报告标注样本期、费用假设、日内路径近似局限；短样本最优参数不固化。
+
+## 十一、阶段二实证记录（2026-08-25）
+
+> 两轮实验证据链完整，结论一致：**主锚维持多周期几何均值**。滚动样本外是唯一裁判（样本内优势两度被证伪）。
+
+### 11.1 评估器批量实证（14 标 / 30 标）
+- `scripts/grid_backtest_batch.py`（--pool active/grid_config + is_active 标注）扫描 A 池：
+  - 14 标（active）：weekly_dynamic 最优 6/14，floating 平均超额最高 +35.7%（弱市靠重置控回撤）；
+  - 30 标（网格池，20 个次新补数后）：floating win 12 / weekly 11 / fixed 7；**平均超额 weekly +24.4% 跃居第一**（样本内）。
+- 数据补全：`refresh_fund_daily.py --skip-merge-check`（回溯补数跨期衔接校验误报时跳过），fund_daily.csv 83646→105983 行。
+
+### 11.2 滚动样本外验证（weekly_dynamic 候选主锚定稿）
+- `grid_backtest_eval.py --mode rolling`（预热 750 + 评估 126 + 步长 22）。判定标准（用户拍板）：①窗口胜率≥60%（weekly 相对 fixed）②ADX 四象限 ≥3 正超额 ③最差窗口超额 >-5%，全过升正式主锚。
+- **试点 5 标 5/5 未通过**；**全量 16 可判定标的仅 515180.SH（红利）通过**（胜率 0.79/象限 4/4/最差 -2.8%）。14 个次新标的历史 <876 日无法滚窗。
+- **决策：weekly_dynamic 维持候选主锚，不升正式**。适用场景记录：红利低波类（515180 通过、515650 最差 -5.2% 略超阈）。
+
+### 11.3 锚公式对比（5 取法 × 16 标）
+- `grid_backtest_eval.py --anchor-method`（geometric_mean/vwap/sma/swing_mid/fibonacci）+ `scripts/anchor_comparison.py`（fixed×spread1.0 全样本）+ `anchor_rolling_compare.py`（sma vs geom 滚动样本外）。
+- 全样本：sma 边际最优（净 52.6% vs geom 51.2%，最优 7/16）、vwap 最差（45.4%）；滚动样本外：**sma win_rate≥60% 标的 = 0/16**，平均胜率 43.8%、平均超额 -0.40%。
+- **决策：5 种锚取法滚动样本外均不优于几何均值，主锚维持现状，无升级。**
+
+### 11.4 方法学结论
+- 两轮「样本内优势 → 滚动样本外证伪」（weekly 平均超额第一 → 5/5 翻车；sma 净收益第一 → 0/16 达标）确认：**滚动样本外验证是不可跳过的定稿裁判**。
+- 后续方向（未启动）：消融实验（h/u 参数敏感性）、间距分位 p50/p75/p90 对比、库存修正锚 M*=M·exp(-γI)、ATR 逐日自适应。
