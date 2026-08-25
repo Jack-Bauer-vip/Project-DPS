@@ -342,7 +342,7 @@ class ReferencePipelineTests(unittest.TestCase):
         self.assertTrue((out / "grid_suggestion.json").exists())
         self.assertTrue((out / "grid_suggestion_table.csv").exists())
         suggestion = json.loads((out / "grid_suggestion.json").read_text(encoding="utf-8"))
-        self.assertEqual(suggestion["schema_version"], "grid-suggestion-v1")
+        self.assertEqual(suggestion["schema_version"], "grid-suggestion-v2")
         self.assertEqual(suggestion["approval_policy"], "REFERENCE_ONLY")
         self.assertEqual(suggestion["data_asof"], "2026-08-06")
         self.assertEqual(len(suggestion["strategies"]), 1)

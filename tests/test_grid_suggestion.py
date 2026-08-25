@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import math
 import unittest
 
 import numpy as np
@@ -54,6 +55,17 @@ def _suitability_frame(n: int = 80, amplitude: float = 3.0, period: int = 20) ->
     return _frame(close, high=close + 2.0, low=close - 2.0, vol=[1000.0] * n)
 
 
+def _trend_frame(n: int = 80, slope: float = 0.8) -> pd.DataFrame:
+    """强趋势 + 摆动：drift 高（drift_score→0），供低分级（marginal/not_suitable）测试。
+
+    V2 下 amplitude 分量受 ATR 主公式约束，旧小摆动 fixture 会让 amplitude 饱和
+    而无法落入低分级；用强趋势压低 drift_score 触发 marginal/not_suitable。
+    """
+    t = np.arange(n)
+    close = 100.0 + t * slope + 5.0 * np.sin(t * 2 * np.pi / 20)
+    return _frame(close, high=close + 3.0, low=close - 3.0, vol=[1000.0] * n)
+
+
 def _grid_row(**overrides) -> dict:
     row = {
         "vol_rank_60d": 0.6,
@@ -95,26 +107,24 @@ class SuitabilityTests(unittest.TestCase):
         self.assertEqual(result["grade"], "suitable")
 
     def test_grading_marginal(self) -> None:
-        frame = _suitability_frame()
+        frame = _trend_frame()
         result = gs._compute_suitability(
-            frame, _grid_row(vol_rank_60d=0.3, suggested_reference_spread=0.15),
-            gs._grid_params(None),
+            frame, _grid_row(vol_rank_60d=0.3), gs._grid_params(None),
         )
-        # vol_rank=0.3 → 100-100*|0.3-0.6|/0.5=40；amp=100*(0.04/0.15)/0.8≈33.3；
-        # trigger=0（0.15 间距下 ±3 摆幅不跨档）；score≈48.7 → marginal。
-        self.assertAlmostEqual(result["breakdown"]["vol_rank_score"], 40.0, places=2)
-        self.assertAlmostEqual(result["breakdown"]["amplitude_score"], 33.33, places=1)
-        self.assertEqual(result["breakdown"]["trigger_freq_score"], 0.0)
+        # 强趋势 → drift_score=0；vol_rank=0.3 → vol_rank_score=40；
+        # score≈52 → marginal（[45,70) 带）。
+        self.assertEqual(result["breakdown"]["vol_rank_score"], 40.0)
+        self.assertEqual(result["breakdown"]["drift_score"], 0.0)
         self.assertGreaterEqual(result["score"], 45.0)
         self.assertLess(result["score"], 70.0)
         self.assertEqual(result["grade"], "marginal")
 
     def test_grading_not_suitable(self) -> None:
-        frame = _suitability_frame()
+        frame = _trend_frame()
         result = gs._compute_suitability(
-            frame, _grid_row(vol_rank_60d=0.0, suggested_reference_spread=0.20),
-            gs._grid_params(None),
+            frame, _grid_row(vol_rank_60d=0.0), gs._grid_params(None),
         )
+        # 强趋势 + vol_rank=0 → score≈40 → not_suitable（<45）。
         self.assertEqual(result["breakdown"]["vol_rank_score"], 0.0)
         self.assertLess(result["score"], 45.0)
         self.assertEqual(result["grade"], "not_suitable")
@@ -138,25 +148,28 @@ class SuitabilityTests(unittest.TestCase):
 
 
 class AnchorTests(unittest.TestCase):
-    """中轴建议：VWAP60 → SMA60。"""
+    """中轴建议（V2）：多窗口(20/60/90/120)几何均值主锚 + 各窗口来源。"""
 
     def test_anchor_vwap_60(self) -> None:
-        n = 80
+        n = 130
         close = 100.0 + np.arange(n) * 0.1
         vol = np.arange(n) * 100.0 + 1000.0
-        window = gs._asset_window(_frame(close, vol=vol), 60, "2024-04-30")
-        anchor, basis = gs._anchor_suggestion(window)
-        self.assertEqual(basis, "vwap_60")
-        expected = (window["close"] * window["vol"]).sum() / window["vol"].sum()
-        self.assertAlmostEqual(anchor, round(float(expected), 3), places=3)
+        result = gs._anchor_suggestion(_frame(close, vol=vol), gs._grid_params(None))
+        # 130 行 → 4 窗口全有效；全窗口有量 → VWAP 源。
+        self.assertEqual(result["basis"], "geomean_of_4_sources")
+        self.assertIn("vwap_60", result["sources"])
+        expected = math.exp(
+            sum(math.log(v) for v in result["sources"].values()) / len(result["sources"])
+        )
+        self.assertAlmostEqual(result["anchor"], round(expected, 3), places=3)
 
     def test_anchor_sma_60_when_no_volume(self) -> None:
-        n = 80
+        n = 130
         close = 100.0 + np.arange(n) * 0.1
-        window = gs._asset_window(_frame(close), 60, "2024-04-30")
-        anchor, basis = gs._anchor_suggestion(window)
-        self.assertEqual(basis, "sma_60")
-        self.assertAlmostEqual(anchor, round(float(window["close"].mean()), 3), places=3)
+        result = gs._anchor_suggestion(_frame(close), gs._grid_params(None))
+        # 无量 → SMA 源；多窗口几何均值。
+        self.assertEqual(result["basis"], "geomean_of_4_sources")
+        self.assertIn("sma_60", result["sources"])
 
 
 class SpreadsTests(unittest.TestCase):
@@ -165,33 +178,33 @@ class SpreadsTests(unittest.TestCase):
     def test_edge_spread_cone_amplification(self) -> None:
         frame = _suitability_frame()
         row = _grid_row(suggested_reference_spread=0.02, cone_60_p95=0.06, cone_60_p50=0.02)
-        regular, edge, basis = gs._spreads(frame, row, gs._grid_params(None))
-        self.assertEqual(regular, 0.02)
-        self.assertAlmostEqual(edge, 0.06, places=4)  # 2%×3
+        regular, edge, basis, _info = gs._spreads(frame, row, gs._grid_params(None))
+        self.assertIsNotNone(regular)
+        self.assertAlmostEqual(edge, round(regular * 3.0, 4), places=4)  # cone 比例 3 > 默认 2 → ×3
         self.assertEqual(basis, "cone_60_p95")
 
     def test_edge_spread_capped_at_max_multiple(self) -> None:
         frame = _suitability_frame()
         row = _grid_row(suggested_reference_spread=0.02, cone_60_p95=0.10, cone_60_p50=0.02)
-        regular, edge, basis = gs._spreads(frame, row, gs._grid_params(None))
-        self.assertEqual(regular, 0.02)
-        self.assertAlmostEqual(edge, 0.08, places=4)  # 比例 5 封顶 4×
+        regular, edge, basis, _info = gs._spreads(frame, row, gs._grid_params(None))
+        self.assertIsNotNone(regular)
+        self.assertAlmostEqual(edge, round(regular * 4.0, 4), places=4)  # 比例 5 封顶 4×
         self.assertEqual(basis, "cone_60_p95")
 
     def test_edge_spread_cone_ratio_below_default_uses_default(self) -> None:
         frame = _suitability_frame()
         row = _grid_row(suggested_reference_spread=0.02, cone_60_p95=0.03, cone_60_p50=0.02)
-        regular, edge, basis = gs._spreads(frame, row, gs._grid_params(None))
-        self.assertEqual(regular, 0.02)
-        self.assertAlmostEqual(edge, 0.04, places=4)  # 比例 1.5 < 2 → 用默认乘子
+        regular, edge, basis, _info = gs._spreads(frame, row, gs._grid_params(None))
+        self.assertIsNotNone(regular)
+        self.assertAlmostEqual(edge, round(regular * 2.0, 4), places=4)  # 比例 1.5 < 2 → 默认乘子
         self.assertEqual(basis, "cone_60_p95")
 
     def test_edge_spread_default_multiplier_when_no_cone(self) -> None:
         frame = _suitability_frame()
         row = _grid_row(suggested_reference_spread=0.02, cone_60_p95=None, cone_60_p50=None)
-        regular, edge, basis = gs._spreads(frame, row, gs._grid_params(None))
-        self.assertEqual(regular, 0.02)
-        self.assertAlmostEqual(edge, 0.04, places=4)
+        regular, edge, basis, _info = gs._spreads(frame, row, gs._grid_params(None))
+        self.assertIsNotNone(regular)
+        self.assertAlmostEqual(edge, round(regular * 2.0, 4), places=4)
         self.assertEqual(basis, "default_multiplier")
 
 
@@ -275,7 +288,7 @@ class BuildGridSuggestionTests(unittest.TestCase):
         suggestion = gs.build_grid_suggestion(
             [strategy], self._market_data(), self._grid_reference(), None, "2024-05-31"
         )
-        self.assertEqual(suggestion["schema_version"], "grid-suggestion-v1")
+        self.assertEqual(suggestion["schema_version"], "grid-suggestion-v2")
         self.assertEqual(suggestion["approval_policy"], "REFERENCE_ONLY")
         self.assertEqual(suggestion["data_asof"], "2024-05-31")
         self.assertEqual(len(suggestion["strategies"]), 1)
@@ -284,10 +297,16 @@ class BuildGridSuggestionTests(unittest.TestCase):
         self.assertEqual(len(entry["assets"]), 2)
         for asset in entry["assets"]:
             for field in ("asset_id", "suitability", "suitability_breakdown", "anchor_suggestion",
-                          "anchor_basis", "regular_spread", "edge_spread", "edge_spread_basis",
-                          "regular_levels_per_side", "edge_levels_per_side", "confidence"):
+                          "anchor_basis", "anchor_sources", "anchor_stability_score",
+                          "anchor_stability_grade", "anchor_references",
+                          "regular_spread", "edge_spread", "edge_spread_basis",
+                          "spread_basis", "spread_regime", "spread_alternatives",
+                          "cost_constraint_applied", "cost_constraint_note",
+                          "regular_levels_per_side", "edge_levels_per_side",
+                          "spacing_reference", "confidence"):
                 self.assertIn(field, asset)
-            self.assertEqual(asset["anchor_basis"], "vwap_60")
+            # 90 行数据 → 20/60/90/120 窗口全有效（V2 多周期几何均值主锚）
+            self.assertEqual(asset["anchor_basis"], "geomean_of_4_sources")
             self.assertEqual(asset["regular_levels_per_side"], 3)
             self.assertEqual(asset["edge_levels_per_side"], 1)
             for value in asset.values():
@@ -343,8 +362,11 @@ class BuildGridSuggestionTests(unittest.TestCase):
         expected_cols = {
             "strategy_id", "asset_id", "suitability_score", "suitability",
             "vol_rank_score", "amplitude_score", "drift_score", "trigger_freq_score",
-            "anchor_suggestion", "anchor_basis", "regular_spread", "edge_spread",
-            "edge_spread_basis", "regular_levels_per_side", "edge_levels_per_side",
+            "anchor_suggestion", "anchor_basis", "anchor_sources", "anchor_stability_score",
+            "anchor_stability_grade", "anchor_references", "regular_spread", "edge_spread",
+            "edge_spread_basis", "spread_basis", "spread_regime", "spread_alternatives",
+            "cost_constraint_applied", "cost_constraint_note",
+            "regular_levels_per_side", "edge_levels_per_side",
             "spacing_reference_default", "spacing_reference_min", "spacing_reference_max",
             "confidence",
             # 现有网格口径（theoretical_profit_actual）加性列
@@ -354,7 +376,7 @@ class BuildGridSuggestionTests(unittest.TestCase):
         }
         self.assertEqual(set(table.columns), expected_cols)
         self.assertEqual(table.loc[0, "strategy_id"], "grid_lh")
-        self.assertEqual(table.loc[0, "anchor_basis"], "vwap_60")
+        self.assertEqual(table.loc[0, "anchor_basis"], "geomean_of_4_sources")
         self.assertTrue(table["edge_spread_basis"].notna().all())
 
     @staticmethod

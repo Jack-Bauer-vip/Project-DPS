@@ -156,31 +156,32 @@ class SpacingReferenceTests(unittest.TestCase):
         })
 
     def test_clamp_upper_bound(self) -> None:
-        # ATR≈4%（delta=0.02）→ default=clamp(6%, 2.5%, 5%)=5%，min=3.5%、max=7.5%。
+        # V2：default=ATR 主公式，ATR≈4%（delta=0.02）→ clamp(6%, cost_floor, cap=5%)=5%。
         frame = self._frame([100.0] * 60, delta=0.02)
         triplet = spacing_reference_triplet(frame, {}, gs._grid_params(None))
         self.assertEqual(triplet["default"], 0.05)
         self.assertEqual(triplet["min"], 0.035)
         self.assertEqual(triplet["max"], 0.075)
-        self.assertEqual(triplet["basis"], "atr20")
+        self.assertEqual(triplet["basis"], "atr20_regime")
         self.assertEqual(triplet["confidence"], "high")
 
     def test_clamp_lower_bound(self) -> None:
-        # ATR≈1%（delta=0.005）→ default=clamp(1.5%, 2.5%, 5%)=2.5%。
+        # V2：ATR≈1%（delta=0.005）→ default=0.015（ATR 线性 ×1.5，无旧固定 2.5% 下限）。
         frame = self._frame([100.0] * 60, delta=0.005)
         triplet = spacing_reference_triplet(frame, {}, gs._grid_params(None))
-        self.assertEqual(triplet["default"], 0.025)
-        self.assertEqual(triplet["min"], 0.0175)
-        self.assertEqual(triplet["max"], 0.0375)
+        self.assertEqual(triplet["default"], 0.015)
+        self.assertEqual(triplet["min"], 0.0105)
+        self.assertEqual(triplet["max"], 0.0225)
+        self.assertEqual(triplet["basis"], "atr20_regime")
 
     def test_clamp_mid_range_formula(self) -> None:
-        # ATR≈2%（delta=0.01）→ default=clamp(3%, ...)=3%，min=2.1%、max=4.5%。
+        # V2：ATR≈2%（delta=0.01）→ default=0.03、min=0.021、max=0.045。
         frame = self._frame([100.0] * 60, delta=0.01)
         triplet = spacing_reference_triplet(frame, {}, gs._grid_params(None))
         self.assertEqual(triplet["default"], 0.03)
         self.assertEqual(triplet["min"], 0.021)
         self.assertEqual(triplet["max"], 0.045)
-        self.assertEqual(triplet["basis"], "atr20")
+        self.assertEqual(triplet["basis"], "atr20_regime")
         self.assertEqual(triplet["confidence"], "high")
 
     def test_insufficient_history_low_confidence(self) -> None:
