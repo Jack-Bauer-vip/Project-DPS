@@ -72,6 +72,26 @@ _SOURCE_SYSTEM = "systemB"
 # ============================================================
 
 @dataclass(frozen=True)
+class GridConfig:
+    """契约嵌套 ``assets[].grid_config``（A 侧导出，两段步长网格参数）。
+
+    - ``anchor_price``：网格中轴（60d VWAP/SMA/中点，A 侧导出）；None 时回退
+      首日收盘。
+    - 常规段档距 ``regular_spread``、边缘段档距 ``edge_spread``。
+    - 每侧总格数 = ``regular_levels_per_side + edge_levels_per_side``。
+    """
+    anchor_price: float | None
+    regular_spread: float
+    edge_spread: float
+    regular_levels_per_side: int
+    edge_levels_per_side: int
+
+    @property
+    def total_levels_per_side(self) -> int:
+        return self.regular_levels_per_side + self.edge_levels_per_side
+
+
+@dataclass(frozen=True)
 class ContractAsset:
     """契约内单标的（``assets[]`` 元素）。"""
     asset_id: str
@@ -82,6 +102,34 @@ class ContractAsset:
     max_weight: float
     target_weight_configured: bool
     suggested_spread: float | None = None  # schema 1.1 预留，当前恒 None
+    # 契约 asset 级嵌套 grid_config（P0-B，A 侧导出）：字段全在且合法时生效，
+    # 否则 ``grid_config`` 属性返回 None → 回测完全回退旧网格行为。
+    anchor_price: float | None = None
+    regular_spread: float | None = None
+    edge_spread: float | None = None
+    regular_levels_per_side: int | None = None
+    edge_levels_per_side: int | None = None
+
+    @property
+    def grid_config(self) -> GridConfig | None:
+        """两段步长网格参数；字段不齐/非法 → None（缺省回退旧行为）。"""
+        if self.regular_spread is None or self.edge_spread is None:
+            return None
+        if self.regular_levels_per_side is None or self.edge_levels_per_side is None:
+            return None
+        if self.regular_spread <= 0 or self.edge_spread <= 0:
+            return None
+        if self.regular_levels_per_side < 0 or self.edge_levels_per_side < 0:
+            return None
+        if self.regular_levels_per_side + self.edge_levels_per_side <= 0:
+            return None
+        return GridConfig(
+            anchor_price=self.anchor_price,
+            regular_spread=self.regular_spread,
+            edge_spread=self.edge_spread,
+            regular_levels_per_side=int(self.regular_levels_per_side),
+            edge_levels_per_side=int(self.edge_levels_per_side),
+        )
 
 
 @dataclass(frozen=True)
@@ -97,9 +145,15 @@ class ContractStrategy:
     signal_filters: list | None
     preferences: dict
     assets: list[ContractAsset]
+    # 资本桶（strategy_master 列，A 侧契约 strategies[] 已导出；B 侧网格建议引擎按
+    # capital_bucket=="grid" 过滤）。缺失/旧契约 → None（回退 decision_rule 判断）。
+    capital_bucket: str | None = None
     # 策略模板×实例改造第一刀（schema 1.0 扩展，A 侧可选）：B 侧当前不消费，仅透传承载。
     template_id: str | None = None
     account_id: str | None = None
+    # 网格推荐组合（B2）：A 侧契约 strategies[] 已有，B 侧承载供资金预算参考。
+    target_capital_weight: float = 0.0
+    risk_budget: float | None = None
 
     @property
     def enabled_assets(self) -> tuple[str, ...]:
@@ -133,6 +187,8 @@ class BacktestContract:
     generated_by: str
     strategies: list[ContractStrategy]
     cost: CostConfig
+    # 契约 shared_config.grid（A 侧 strategy_params.json 新增 "grid" 段）；缺省 None。
+    shared_grid: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -173,7 +229,8 @@ class BacktestResult:
 def parse_contract(path: str | Path | None = None) -> BacktestContract:
     """解析 A 侧策略规则契约 JSON 为 ``BacktestContract``。
 
-    - ``schema_version != "1.0"`` → 抛 ``ValueError``（严格）。
+    - ``schema_version`` 不在 {"1.0", "1.1"} → 抛 ``ValueError``（严格）；
+      schema 1.1 支持资产级 ``grid_config`` 嵌套（A 侧已导出）。
     - ``target_weight_configured=false`` → ``target_weight=None``（不虚构权重）。
     - ``signal_filters`` null → ``None``（语义=不过滤）。
     - 未知 ``rebalance_frequency`` → ``monthly`` + warning。
@@ -193,9 +250,9 @@ def parse_contract(path: str | Path | None = None) -> BacktestContract:
         raw = json.load(handle)
 
     schema_version = str(raw.get("schema_version", ""))
-    if schema_version != "1.0":
+    if schema_version not in {"1.0", "1.1"}:
         raise ValueError(
-            f"不支持的契约 schema_version={schema_version!r}（引擎仅支持 1.0）"
+            f"不支持的契约 schema_version={schema_version!r}（引擎仅支持 1.0 / 1.1）"
         )
 
     strategies = [
@@ -209,6 +266,9 @@ def parse_contract(path: str | Path | None = None) -> BacktestContract:
         slippage_rate=float(backtest.get("slippage_rate", 0.0)),
         stamp_duty_rate=0.0,  # ETF 免印花税
     )
+    shared_grid = shared.get("grid")
+    if not isinstance(shared_grid, dict):
+        shared_grid = None
     return BacktestContract(
         schema_version=schema_version,
         contract_type=str(raw.get("contract_type", "")),
@@ -216,6 +276,7 @@ def parse_contract(path: str | Path | None = None) -> BacktestContract:
         generated_by=str(raw.get("generated_by", "")),
         strategies=strategies,
         cost=cost,
+        shared_grid=shared_grid,
     )
 
 
@@ -227,6 +288,11 @@ def _parse_strategy(raw: dict) -> ContractStrategy:
         filters = [dict(item) for item in filters]
     else:
         filters = None  # null → 不过滤
+    # 资本桶（strategy_master 列）：契约里有就取字符串，缺失/类型不对 → None（不抛错，
+    # 旧契约/测试 fixture 无该字段时回退 decision_rule 判断）。
+    capital_bucket = raw.get("capital_bucket")
+    if not isinstance(capital_bucket, str):
+        capital_bucket = None
     # 策略模板×实例扩展字段（schema 1.0 可选）：契约里有就取字符串，缺失/类型不对 → None（不抛错）。
     template_id = raw.get("template_id")
     if not isinstance(template_id, str):
@@ -234,6 +300,14 @@ def _parse_strategy(raw: dict) -> ContractStrategy:
     account_id = raw.get("account_id")
     if not isinstance(account_id, str):
         account_id = None
+    # 网格推荐组合（B2）：target_capital_weight（默认 0.0，非法值不抛错）、
+    # risk_budget（None=未配置，不虚构）。
+    raw_weight = raw.get("target_capital_weight")
+    try:
+        target_capital_weight = float(raw_weight) if raw_weight is not None else 0.0
+    except (TypeError, ValueError):
+        target_capital_weight = 0.0
+    risk_budget = _as_float(raw.get("risk_budget"))
     return ContractStrategy(
         strategy_id=str(raw.get("strategy_id", "")),
         decision_rule=str(raw.get("decision_rule", "mid_line")),
@@ -251,9 +325,32 @@ def _parse_strategy(raw: dict) -> ContractStrategy:
         signal_filters=filters,
         preferences=dict(raw.get("preferences", {})),
         assets=assets,
+        capital_bucket=capital_bucket,
         template_id=template_id,
         account_id=account_id,
+        target_capital_weight=target_capital_weight,
+        risk_budget=risk_budget,
     )
+
+
+def _as_float(value: Any) -> float | None:
+    """数字/可转 float 值 → float；否则 None（不抛错）。"""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_int(value: Any) -> int | None:
+    """整数值 → int；否则 None（不抛错）。"""
+    number = _as_float(value)
+    if number is None or not np.isfinite(number):
+        return None
+    return int(number)
 
 
 def _parse_asset(raw: dict) -> ContractAsset:
@@ -261,6 +358,16 @@ def _parse_asset(raw: dict) -> ContractAsset:
     configured = bool(raw.get("target_weight_configured", True))
     target = raw.get("target_weight")
     target_weight = float(target) if (configured and target is not None) else None
+    # 契约 asset 级嵌套 grid_config（A 侧导出）：缺失/非 dict → 全 None（缺省回退）。
+    anchor_price = regular_spread = edge_spread = None
+    regular_levels_per_side = edge_levels_per_side = None
+    gcfg = raw.get("grid_config")
+    if isinstance(gcfg, dict):
+        anchor_price = _as_float(gcfg.get("anchor_price"))
+        regular_spread = _as_float(gcfg.get("regular_spread"))
+        edge_spread = _as_float(gcfg.get("edge_spread"))
+        regular_levels_per_side = _as_int(gcfg.get("regular_levels_per_side"))
+        edge_levels_per_side = _as_int(gcfg.get("edge_levels_per_side"))
     return ContractAsset(
         asset_id=str(raw.get("asset_id", "")),
         role=raw.get("role"),
@@ -275,6 +382,11 @@ def _parse_asset(raw: dict) -> ContractAsset:
             and isinstance(raw["suggested_spread"], (int, float))
             else None
         ),
+        anchor_price=anchor_price,
+        regular_spread=regular_spread,
+        edge_spread=edge_spread,
+        regular_levels_per_side=regular_levels_per_side,
+        edge_levels_per_side=edge_levels_per_side,
     )
 
 
@@ -1001,10 +1113,17 @@ def run_backtest(
     grid_anchor: dict[str, float] = {}
     grid_index: dict[str, int] = {}
     if strategy.decision_rule == "grid":
+        asset_map_for_anchor = _asset_map(strategy)
         for asset_id in enabled:
-            price = _close_at(first_prices, asset_id)
-            if price is not None and price > 0:
-                grid_anchor[asset_id] = price
+            # 契约嵌套 grid_config 带 anchor_price 时锚=配置中轴；否则回退首日收盘。
+            cfg = asset_map_for_anchor[asset_id].grid_config
+            anchor = cfg.anchor_price if (cfg is not None and cfg.anchor_price is not None) else None
+            if anchor is None:
+                price = _close_at(first_prices, asset_id)
+                if price is not None and price > 0:
+                    anchor = price
+            if anchor is not None:
+                grid_anchor[asset_id] = anchor
             grid_index[asset_id] = 0
 
     # ---- 主循环 ----
@@ -1166,8 +1285,13 @@ def _grid_signal(
 ) -> list[dict[str, Any]]:
     """网格每日 T 收盘信号：判定档位穿越，生成 BUY/SELL 订单。
 
-    - ``raw = (close − anchor) / (anchor × spread)``；``raw>=1`` 卖、``raw<=-1`` 买，
-      按 ``floor(|raw|)`` 档数。锚价信号日更新（B侧假设，进 assumptions）。
+    - ``raw = (close − anchor) / (anchor × regular_spread)``；``raw>=1`` 卖、
+      ``raw<=-1`` 买，按 ``floor(|raw|)`` 档数。锚价信号日更新（B侧假设）。
+    - **两段步长**（契约嵌套 ``grid_config``）：|raw| 档数在常规段
+      （1..regular_levels_per_side）每档用 regular_spread；进入边缘段（>常规档）
+      每档用 edge_spread。每侧总格数 = regular + edge；缺省（无 grid_config）
+      完全回退旧行为（锚=首日收盘、单档距 ``resolve_grid_spread``、
+      ``GRID_LEVELS_PER_SIDE=4``、``step_notional`` 用 2×每侧总格数）。
     """
     orders: list[dict[str, Any]] = []
     asset_map = _asset_map(strategy)
@@ -1175,40 +1299,67 @@ def _grid_signal(
         close = _close_at(prices.loc[date], asset_id)
         if close is None or close <= 0:
             continue
+        asset = asset_map.get(asset_id)
+        gcfg = asset.grid_config if asset is not None else None
         if asset_id not in grid_anchor:
             # 上市晚于回测起点的标的：上市当日按中枢 max×0.5 建仓（先验），
-            # 并初始化锚价 = 当日收盘；当日不触发档位信号，次日进入档位交易。
+            # 并初始化锚价（有 grid_config 用配置中轴，否则当日收盘）；
+            # 当日不触发档位信号，次日进入档位交易。
             # （修复：此前 grid_anchor 仅回测首日初始化，上市晚的标的永不触网。）
-            grid_anchor[asset_id] = close
+            if gcfg is not None and gcfg.anchor_price is not None:
+                grid_anchor[asset_id] = gcfg.anchor_price
+            else:
+                grid_anchor[asset_id] = close
             grid_index[asset_id] = 0
-            target_notional = grid_target_weight(asset_map[asset_id]) * cash
+            target_notional = grid_target_weight(asset) * cash
             shares = round_lot(target_notional / close, lot)
             if shares > 0:
                 orders.append({"asset_id": asset_id, "side": "BUY", "shares": shares})
             continue
         anchor = grid_anchor[asset_id]
-        spread = grid_spreads.get(asset_id, DEFAULT_GRID_SPREAD)
-        if spread <= 0:
+        if gcfg is not None:
+            regular_spread = gcfg.regular_spread
+            edge_spread = gcfg.edge_spread
+            regular_levels = gcfg.regular_levels_per_side
+            edge_levels = gcfg.edge_levels_per_side
+            total_levels = gcfg.total_levels_per_side
+        else:
+            spread = grid_spreads.get(asset_id, DEFAULT_GRID_SPREAD)
+            if spread <= 0:
+                continue
+            regular_spread = spread
+            edge_spread = spread
+            regular_levels = GRID_LEVELS_PER_SIDE
+            edge_levels = 0
+            total_levels = GRID_LEVELS_PER_SIDE
+        if regular_spread <= 0 or anchor <= 0:
             continue
-        raw = (close - anchor) / (anchor * spread)
-        step_notional = (
-            asset_map[asset_id].max_weight * cash / (2 * GRID_LEVELS_PER_SIDE)
-        )
+        raw = (close - anchor) / (anchor * regular_spread)
+        # 每侧总格数（常规+边缘）→ 两段合计仓位份数。
+        step_notional = asset.max_weight * cash / (2 * total_levels)
         if raw >= 1:
             levels = int(math.floor(raw))
+            regular_n = min(levels, regular_levels)
+            edge_n = levels - regular_n
+            factor = (1.0 + regular_spread) ** regular_n
+            if edge_n > 0:
+                factor *= (1.0 + edge_spread) ** edge_n
             shares = round_lot(step_notional / close, lot)
             if shares > 0:
                 orders.append({"asset_id": asset_id, "side": "SELL", "shares": shares})
-            new_anchor = anchor * ((1 + spread) ** levels)
-            grid_anchor[asset_id] = new_anchor
+            grid_anchor[asset_id] = anchor * factor
             grid_index[asset_id] += levels
         elif raw <= -1:
             levels = int(math.floor(-raw))
+            regular_n = min(levels, regular_levels)
+            edge_n = levels - regular_n
+            factor = (1.0 - regular_spread) ** regular_n
+            if edge_n > 0:
+                factor *= (1.0 - edge_spread) ** edge_n
             shares = round_lot(step_notional / close, lot)
             if shares > 0:
                 orders.append({"asset_id": asset_id, "side": "BUY", "shares": shares})
-            new_anchor = anchor * ((1 - spread) ** levels)
-            grid_anchor[asset_id] = new_anchor
+            grid_anchor[asset_id] = anchor * factor
             grid_index[asset_id] -= levels
     return orders
 
@@ -1511,6 +1662,7 @@ __all__ = [
     "ContractAsset",
     "ContractStrategy",
     "CostConfig",
+    "GridConfig",
     "TradeRecord",
     "apply_signal_filters",
     "build_phase_lookup",

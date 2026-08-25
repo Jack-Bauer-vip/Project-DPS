@@ -19,6 +19,8 @@ from typing import Any
 import pandas as pd
 
 from qteasy_research.reference.config import (
+    GRID_RECOMMENDATION_SUBDIR,
+    GRID_SUGGESTION_SUBDIR,
     HEARTBEAT_MAX_AGE_DAYS,
     MAX_BACKUPS,
     PIPELINE_VERSION,
@@ -146,6 +148,8 @@ class IntegrationDir:
             "files": [record["name"] for record in file_records],
             "backup_path": f"{BACKUP_DIR}/{run_id}",
             "consumed": {"by": "systemA", "at": None},
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
         }
         if cadence:
             record["cadence"] = cadence
@@ -239,6 +243,8 @@ class IntegrationDir:
             "subdir": subdir,
             "backup_path": f"{BACKUP_DIR}/{run_id}",
             "consumed": {"by": "systemA", "at": None},
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
         }
         if cadence:
             record["cadence"] = cadence
@@ -365,16 +371,64 @@ class IntegrationDir:
                 logger.warning("manifest.json 解析失败，已重置。")
         return {"schema_version": SCHEMA_VERSION, "newest_run": None, "runs": {}}
 
+    def _merge_run_record(self, existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+        """同 run_id 二次发包时**合并** manifest run 记录（不覆盖）。
+
+        同一日期 run 下日度决策包 + 各子目录包（grid_suggestion /
+        grid_recommendation / portfolio_analysis / macro_monitoring）会多次
+        ``_update_manifest``；直接覆盖会丢先前包的 files / checksums。
+
+        - ``files``：append 去重（保序）。
+        - ``checksums``：按文件 merge（同文件以最新磁盘 sha256 为准）。
+        - ``status``：任一包就绪即 READY。
+        - ``generated_date`` / ``data_asof``：以最新为准（同 run 通常一致）。
+        - ``created_at`` 保留最早；``updated_at`` 用最新。
+        - 子包独有字段（``cadence`` / ``package_kind`` / ``subdir``）：已存在保留
+          原值（日度包无这些字段，先到子包写入），新包引入则追加，不丢字段。
+          顶层 newest_* 指针判定不依赖合并后的这些字段（见 ``_update_manifest``
+          合并前捕获）。
+        """
+        merged = dict(existing)
+
+        files = list(existing.get("files", []))
+        for name in new.get("files", []):
+            if name not in files:
+                files.append(name)
+        merged["files"] = files
+
+        checksums = dict(existing.get("checksums", {}))
+        checksums.update(new.get("checksums", {}))
+        merged["checksums"] = checksums
+
+        merged["status"] = "READY"
+        for key in ("generated_date", "data_asof"):
+            if new.get(key):
+                merged[key] = new[key]
+        if "created_at" not in merged and new.get("created_at"):
+            merged["created_at"] = new["created_at"]
+        merged["updated_at"] = new.get("updated_at") or now_iso()
+
+        for key in ("cadence", "package_kind", "subdir"):
+            if key not in merged and key in new:
+                merged[key] = new[key]
+        return merged
+
     def _update_manifest(self, run_id: str, record: dict[str, Any]) -> None:
         manifest = self._load_manifest()
         runs = dict(manifest.get("runs", {}))
-        runs[run_id] = record
-        manifest["runs"] = runs
+        # 顶层 newest_* 指针判定用**本次发布的包类型**（合并前捕获）：同 run 多包
+        # 时以新包为准（如 20260814 先日度 → grid_suggestion → grid_recommendation，
+        # 各自独立指针依次登记），合并后的 record.package_kind 仅承载先到子包值。
         package_kind = record.get("package_kind")
         is_monthly_macro = (
             record.get("cadence") == "monthly"
             and package_kind == "macro_monitoring"
         )
+        existing = runs.get(run_id)
+        if existing is not None:
+            record = self._merge_run_record(existing, record)
+        runs[run_id] = record
+        manifest["runs"] = runs
         if is_monthly_macro:
             # 月度宏观监控 run 只更新独立顶层 newest_macro_monitoring_run，
             # 绝不顶掉日度 newest_run（避免打断 A 侧日度读端）。
@@ -390,6 +444,21 @@ class IntegrationDir:
                 manifest["newest_portfolio_analysis_run"]
             ):
                 manifest["newest_portfolio_analysis_run"] = run_id
+        elif package_kind == GRID_SUGGESTION_SUBDIR:
+            # 契约（P1-B）：grid_suggestion 包只更新独立顶层
+            # newest_grid_suggestion_run，绝不顶掉日度 newest_run。
+            if manifest.get("newest_grid_suggestion_run") is None or run_id > str(
+                manifest["newest_grid_suggestion_run"]
+            ):
+                manifest["newest_grid_suggestion_run"] = run_id
+        elif package_kind == GRID_RECOMMENDATION_SUBDIR:
+            # 契约（B3）：grid_recommendation 包只更新独立顶层
+            # newest_grid_recommendation_run，绝不顶掉日度 newest_run /
+            # newest_grid_suggestion_run（周度 cadence，weekly）。
+            if manifest.get("newest_grid_recommendation_run") is None or run_id > str(
+                manifest["newest_grid_recommendation_run"]
+            ):
+                manifest["newest_grid_recommendation_run"] = run_id
         else:
             if manifest.get("newest_run") is None or run_id > str(manifest["newest_run"]):
                 manifest["newest_run"] = run_id
@@ -467,6 +536,20 @@ class IntegrationDir:
                 if rec.get("package_kind") == "portfolio_analysis"
             ]
             manifest["newest_portfolio_analysis_run"] = max(portfolio_runs) if portfolio_runs else None
+        newest_grid = manifest.get("newest_grid_suggestion_run")
+        if newest_grid in drop or newest_grid not in runs:
+            grid_runs = [
+                rid for rid, rec in runs.items()
+                if rec.get("package_kind") == GRID_SUGGESTION_SUBDIR
+            ]
+            manifest["newest_grid_suggestion_run"] = max(grid_runs) if grid_runs else None
+        newest_reco = manifest.get("newest_grid_recommendation_run")
+        if newest_reco in drop or newest_reco not in runs:
+            reco_runs = [
+                rid for rid, rec in runs.items()
+                if rec.get("package_kind") == GRID_RECOMMENDATION_SUBDIR
+            ]
+            manifest["newest_grid_recommendation_run"] = max(reco_runs) if reco_runs else None
         (self.root / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
         )

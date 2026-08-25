@@ -21,18 +21,36 @@ from qteasy_research.reference.asset_pool import (
     read_active_assets,
     report_pool_gaps,
 )
+from qteasy_research.reference.backtest_engine import parse_contract
 from qteasy_research.reference.config import (
     BENCHMARKS,
     CONE_PERCENTILES,
+    GRID_RECOMMENDATION_CADENCE,
+    GRID_RECOMMENDATION_DIR,
+    GRID_RECOMMENDATION_SCHEMA_VERSION,
+    GRID_RECOMMENDATION_SUBDIR,
+    GRID_SUGGESTION_DIR,
+    GRID_SUGGESTION_SCHEMA_VERSION,
+    GRID_SUGGESTION_SUBDIR,
     SYSTEM_B_DATA_ROOT,
     VOLATILITY_WINDOWS,
 )
 from qteasy_research.reference.duration_phase import build_duration_phase
+from qteasy_research.reference.grid_recommendation import build_grid_recommendation
 from qteasy_research.reference.grid_reference import build_grid_reference
+from qteasy_research.reference.grid_suggestion import (
+    build_grid_suggestion,
+    build_grid_suggestion_table,
+)
 from qteasy_research.reference.hedge_efficiency import build_hedge_efficiency
 from qteasy_research.reference.macro_scenarios import build_monthly_scenario_table
 from qteasy_research.reference.red_flag import assess_red_flags, load_risk_thresholds
-from qteasy_research.reference.metadata import build_header, embed_header_any, today_iso
+from qteasy_research.reference.metadata import (
+    build_header,
+    embed_header_any,
+    embed_header_csv,
+    today_iso,
+)
 from qteasy_research.reference.rolling_beta import multi_benchmark_beta
 from qteasy_research.reference.schema import AssetDimensions, DecisionRefPackage
 from qteasy_research.reference.shared_dir import IntegrationDir
@@ -171,7 +189,12 @@ def run_pipeline(
     include_duration_phase: bool = True,
     include_red_flag: bool = True,
     include_stress: bool = False,
+    include_grid_suggestion: bool = True,
+    include_grid_recommendation: bool = True,
     risk_params: str | Path | None = None,
+    strategy_contract_path: str | Path | None = None,
+    grid_suggestion_dir: str | Path | None = None,
+    grid_recommendation_dir: str | Path | None = None,
     output_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """执行参考维度管线，写共享目录（或 dry-run 到本地 output_root）。
@@ -191,8 +214,17 @@ def run_pipeline(
         include_stress: 是否计算宏观压力情景损益（``build_stress_simulator``）
             并填充各资产 ``macro_stress``。默认 False（A 侧尚未消费该字段，
             零开销）；计算失败降级为 warning，不崩溃。
+        include_grid_suggestion: 是否计算并输出网格建议包（P1-B：
+            ``grid_suggestion`` 独立子目录包，``approval_policy="REFERENCE_ONLY"``）。
+            默认 True；契约缺失时跳过 + warning，不崩溃。
         risk_params: 系统A ``strategy_params.json`` 路径（默认 ``config``
             常量）；测试注入临时 fixture 用，避免读到真实 A 配置。
+        strategy_contract_path: A 侧策略规则契约 ``strategy_contract.json``
+            路径（默认 ``config.STRATEGY_CONTRACT_PATH``）；测试注入临时 fixture
+            用，避免读到真实 A 契约。
+        grid_suggestion_dir: real 模式网格建议包本地源目录（默认
+            ``config.GRID_SUGGESTION_DIR``）；测试注入临时目录用，避免写入
+            真实 reports/ 目录。
         output_root: 非 None 时走 dry-run：三件套写到该目录（不写共享目录、
             不 write_run/backup/verify），供共享目录未创建时本地验证。
 
@@ -295,14 +327,62 @@ def run_pipeline(
             "assets_metadata.csv": metadata_frame,
         }
         # 阶段一：B1-1 网格参考表 + B1-2 宏观对冲效率并入管线产出。
+        grid_ref_frame: pd.DataFrame | None = None
         if include_grid:
-            payloads["grid_reference_table.csv"] = build_grid_reference(
-                assets, aligned, bench_frames
-            )
+            grid_ref_frame = build_grid_reference(assets, aligned, bench_frames)
+            payloads["grid_reference_table.csv"] = grid_ref_frame
         if include_hedge:
             payloads["macro_hedge_efficiency.parquet"] = build_hedge_efficiency(
                 data_root_path, assets, aligned, macro_table
             )
+
+        # 阶段六（P1-B）：网格建议包（独立子目录包，approval_policy=REFERENCE_ONLY）。
+        # 计算口径唯一源 = contract.shared_config.grid；契约缺失 → 跳过 + warning。
+        grid_suggestion_data: tuple[dict[str, Any], pd.DataFrame] | None = None
+        if include_grid_suggestion:
+            if grid_ref_frame is None:
+                grid_ref_frame = build_grid_reference(assets, aligned, bench_frames)
+            try:
+                contract = parse_contract(strategy_contract_path)
+                suggestion = build_grid_suggestion(
+                    contract.strategies,
+                    aligned,
+                    grid_ref_frame,
+                    contract.shared_grid or {},
+                    data_asof,
+                )
+                grid_suggestion_data = (suggestion, build_grid_suggestion_table(suggestion))
+            except FileNotFoundError:
+                warnings.append(
+                    "strategy_contract.json 缺失，跳过网格建议（grid_suggestion）"
+                )
+            except Exception as exc:
+                warnings.append(f"网格建议失败：{type(exc).__name__}: {exc}")
+
+        # 阶段（B2/B3）：网格推荐组合包（独立子目录包，approval_policy=REFERENCE_ONLY，
+        # cadence="weekly"）。契约缺失/异常 → warning 降级不崩溃。复用 grid_suggestion
+        # 包作为方案标的建议来源；缺失时对方案标的兜底重算。
+        grid_recommendation_data: dict[str, Any] | None = None
+        if include_grid_recommendation:
+            if grid_ref_frame is None:
+                grid_ref_frame = build_grid_reference(assets, aligned, bench_frames)
+            try:
+                reco_contract = parse_contract(strategy_contract_path)
+                reco_suggestion = grid_suggestion_data[0] if grid_suggestion_data is not None else None
+                grid_recommendation_data = build_grid_recommendation(
+                    reco_contract.strategies,
+                    aligned,
+                    grid_ref_frame,
+                    reco_suggestion,
+                    reco_contract.shared_grid or {},
+                    data_asof,
+                )
+            except FileNotFoundError:
+                warnings.append(
+                    "strategy_contract.json 缺失，跳过网格推荐组合（grid_recommendation）"
+                )
+            except Exception as exc:
+                warnings.append(f"网格推荐组合失败：{type(exc).__name__}: {exc}")
 
         if dry_run:
             header = build_header(generated_date=generated_date, data_asof=data_asof)
@@ -310,6 +390,28 @@ def run_pipeline(
             for filename, value in payloads.items():
                 embed_header_any(sink.root / filename, header, value)
                 written.append(filename)
+            if grid_suggestion_data is not None:
+                gs_header = build_header(
+                    generated_date=generated_date,
+                    data_asof=data_asof,
+                    schema_version=GRID_SUGGESTION_SCHEMA_VERSION,
+                )
+                gs_dir = sink.root / GRID_SUGGESTION_SUBDIR
+                gs_dir.mkdir(parents=True, exist_ok=True)
+                embed_header_any(gs_dir / "grid_suggestion.json", gs_header, grid_suggestion_data[0])
+                embed_header_csv(gs_dir / "grid_suggestion_table.csv", gs_header, grid_suggestion_data[1])
+                written.append(f"{GRID_SUGGESTION_SUBDIR}/grid_suggestion.json")
+                written.append(f"{GRID_SUGGESTION_SUBDIR}/grid_suggestion_table.csv")
+            if grid_recommendation_data is not None:
+                gr_header = build_header(
+                    generated_date=generated_date,
+                    data_asof=data_asof,
+                    schema_version=GRID_RECOMMENDATION_SCHEMA_VERSION,
+                )
+                gr_dir = sink.root / GRID_RECOMMENDATION_SUBDIR
+                gr_dir.mkdir(parents=True, exist_ok=True)
+                embed_header_any(gr_dir / "grid_recommendations.json", gr_header, grid_recommendation_data)
+                written.append(f"{GRID_RECOMMENDATION_SUBDIR}/grid_recommendations.json")
             sink.write_heartbeat(status="ok")
             return {
                 "run_id": run_id,
@@ -328,6 +430,52 @@ def run_pipeline(
             warnings=warnings,
         )
         backup_path = integration.backup_run(run_id)
+        # 阶段六（P1-B）：real 模式发布网格建议到共享目录独立子目录。
+        grid_suggestion_published: dict[str, Any] | None = None
+        if grid_suggestion_data is not None:
+            gs_header = build_header(
+                generated_date=generated_date,
+                data_asof=data_asof,
+                schema_version=GRID_SUGGESTION_SCHEMA_VERSION,
+            )
+            gs_out = (Path(grid_suggestion_dir) if grid_suggestion_dir else GRID_SUGGESTION_DIR) / run_id
+            gs_out.mkdir(parents=True, exist_ok=True)
+            embed_header_any(gs_out / "grid_suggestion.json", gs_header, grid_suggestion_data[0])
+            embed_header_csv(gs_out / "grid_suggestion_table.csv", gs_header, grid_suggestion_data[1])
+            grid_suggestion_published = integration.publish_run(
+                run_id,
+                gs_out,
+                subdir=GRID_SUGGESTION_SUBDIR,
+                data_asof=data_asof,
+                generated_date=generated_date,
+                schema_version=GRID_SUGGESTION_SCHEMA_VERSION,
+                cadence=None,
+                package_kind=GRID_SUGGESTION_SUBDIR,
+                warnings=warnings or None,
+            )
+        # 阶段（B2/B3）：real 模式发布网格推荐组合到共享目录独立子目录
+        # （cadence="weekly"，只更新 newest_grid_recommendation_run，绝不顶日度指针）。
+        grid_recommendation_published: dict[str, Any] | None = None
+        if grid_recommendation_data is not None:
+            gr_header = build_header(
+                generated_date=generated_date,
+                data_asof=data_asof,
+                schema_version=GRID_RECOMMENDATION_SCHEMA_VERSION,
+            )
+            gr_out = (Path(grid_recommendation_dir) if grid_recommendation_dir else GRID_RECOMMENDATION_DIR) / run_id
+            gr_out.mkdir(parents=True, exist_ok=True)
+            embed_header_any(gr_out / "grid_recommendations.json", gr_header, grid_recommendation_data)
+            grid_recommendation_published = integration.publish_run(
+                run_id,
+                gr_out,
+                subdir=GRID_RECOMMENDATION_SUBDIR,
+                data_asof=data_asof,
+                generated_date=generated_date,
+                schema_version=GRID_RECOMMENDATION_SCHEMA_VERSION,
+                cadence=GRID_RECOMMENDATION_CADENCE,
+                package_kind=GRID_RECOMMENDATION_SUBDIR,
+                warnings=warnings or None,
+            )
         verify = integration.verify_run(run_id)
         integration.write_heartbeat(status="ok")
         return {
@@ -338,6 +486,8 @@ def run_pipeline(
             "verify": verify,
             "manifest": integration.get_manifest(),
             "consumed": integration.list_consumed(),
+            "grid_suggestion": grid_suggestion_published,
+            "grid_recommendation": grid_recommendation_published,
         }
     except Exception:
         sink.write_heartbeat(status="error")

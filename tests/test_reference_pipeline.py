@@ -46,6 +46,40 @@ class ReferencePipelineTests(unittest.TestCase):
             "volatility_yellow": 0.035, "volatility_yellow_etf": 0.045,
             "volatility_yellow_stock": 0.035, "volatility_yellow_bond_etf": 0.015,
         }}, ensure_ascii=False), encoding="utf-8")
+        # 网格建议契约 fixture（测试隔离：绝不让管线读到真实 A strategy_contract.json）。
+        self.contract_path = self.root / "strategy_contract.json"
+        self.contract_path.write_text(json.dumps({
+            "schema_version": "1.0",
+            "contract_type": "strategy_rules",
+            "generated_at": "2026-08-06T00:00:00",
+            "generated_by": "systemA",
+            "strategies": [
+                {
+                    "strategy_id": "grid_lh",
+                    "decision_rule": "grid",
+                    "enabled": True,
+                    "use_target_ratio": False,
+                    "rebalance_frequency": "daily",
+                    "rebalance_threshold_abs": 0.03,
+                    "asset_rebalance_threshold_abs": 0.02,
+                    "signal_filters": None,
+                    "preferences": {"macro_fit": -0.2},
+                    "assets": [
+                        {"asset_id": "000001.SZ", "role": "grid", "enabled": True,
+                         "min_weight": 0.0, "target_weight": 0.0, "max_weight": 0.2,
+                         "target_weight_configured": False},
+                        {"asset_id": "164824.SZ", "role": "grid", "enabled": True,
+                         "min_weight": 0.0, "target_weight": 0.0, "max_weight": 0.2,
+                         "target_weight_configured": False},
+                    ],
+                }
+            ],
+            "shared_config": {
+                "adj_type": "none",
+                "backtest": {"initial_cash": 100000, "cost_rate": 0.001, "slippage_rate": 0.0005},
+                "grid": {"regular_levels_per_side": 3, "edge_levels_per_side": 1},
+            },
+        }, ensure_ascii=False), encoding="utf-8")
         self.integration = IntegrationDir(self.root / "integration")
 
     def tearDown(self) -> None:
@@ -59,6 +93,8 @@ class ReferencePipelineTests(unittest.TestCase):
             online_ok=False,
             asset_pool=self.pool,
             risk_params=self.risk_params,
+            strategy_contract_path=self.contract_path,
+            grid_suggestion_dir=self.root / "gs_reports",
         )
 
     def _read_package(self) -> dict:
@@ -286,3 +322,102 @@ class ReferencePipelineTests(unittest.TestCase):
         package = self._read_package()
         for asset in package["assets"]:
             self.assertEqual(asset["macro_stress"], {})
+
+    # ---- P1-B：网格建议包（grid_suggestion 独立子目录） ----
+
+    def test_pipeline_grid_suggestion_dry_run_outputs(self) -> None:
+        """dry-run 产出 grid_suggestion/grid_suggestion.json + grid_suggestion_table.csv。"""
+        record = run_pipeline(
+            target_date="2026-08-06",
+            data_root=self.data_root,
+            integration=self.integration,
+            online_ok=False,
+            asset_pool=self.pool,
+            risk_params=self.risk_params,
+            strategy_contract_path=self.contract_path,
+            output_root=self.root / "out",
+        )
+        self.assertEqual(record["status"], "DRY_RUN")
+        out = self.root / "out" / "grid_suggestion"
+        self.assertTrue((out / "grid_suggestion.json").exists())
+        self.assertTrue((out / "grid_suggestion_table.csv").exists())
+        suggestion = json.loads((out / "grid_suggestion.json").read_text(encoding="utf-8"))
+        self.assertEqual(suggestion["schema_version"], "grid-suggestion-v1")
+        self.assertEqual(suggestion["approval_policy"], "REFERENCE_ONLY")
+        self.assertEqual(suggestion["data_asof"], "2026-08-06")
+        self.assertEqual(len(suggestion["strategies"]), 1)
+        strategy = suggestion["strategies"][0]
+        self.assertEqual(strategy["strategy_id"], "grid_lh")
+        self.assertEqual(len(strategy["assets"]), 2)
+        for asset in strategy["assets"]:
+            for field in ("asset_id", "suitability", "suitability_breakdown", "anchor_suggestion",
+                          "anchor_basis", "regular_spread", "edge_spread", "edge_spread_basis",
+                          "regular_levels_per_side", "edge_levels_per_side", "confidence"):
+                self.assertIn(field, asset)
+            for value in asset.values():
+                if isinstance(value, str):
+                    self.assertTrue(value.isascii(), f"非 ASCII: {value}")
+        # 扁平 CSV
+        table = pd.read_csv(out / "grid_suggestion_table.csv", comment="#")
+        self.assertEqual(len(table), 2)
+        for col in ("strategy_id", "asset_id", "suitability", "anchor_basis",
+                    "regular_spread", "edge_spread", "edge_spread_basis",
+                    "regular_levels_per_side", "edge_levels_per_side", "confidence"):
+            self.assertIn(col, table.columns)
+        self.assertTrue(table["anchor_basis"].notna().all())
+        self.assertTrue(table["confidence"].notna().all())
+
+    def test_pipeline_grid_suggestion_published_real(self) -> None:
+        """real 模式发布 grid_suggestion 独立子目录，newest_grid_suggestion_run 指向、
+        newest_run 不被顶掉。"""
+        record = self._run()
+        self.assertEqual(record["status"], "COMPLETED")
+        self.assertTrue(record["verify"]["ok"])
+        run_dir = self.root / "integration" / "systemB_ref" / "20260806"
+        self.assertTrue((run_dir / "grid_suggestion" / "grid_suggestion.json").exists())
+        self.assertTrue((run_dir / "grid_suggestion" / "grid_suggestion_table.csv").exists())
+        self.assertTrue((run_dir / "grid_suggestion" / "package.json").exists())
+        # 本地源目录走注入的 temp（不写真实 reports/）
+        self.assertTrue((self.root / "gs_reports" / "20260806" / "grid_suggestion.json").exists())
+        published = record["grid_suggestion"]
+        self.assertEqual(published["package_kind"], "grid_suggestion")
+        self.assertEqual(published["status"], "READY")
+        manifest = self.integration.get_manifest()
+        self.assertEqual(manifest["newest_run"], "20260806")
+        self.assertEqual(manifest["newest_grid_suggestion_run"], "20260806")
+
+    def test_pipeline_grid_suggestion_missing_contract_skips(self) -> None:
+        """契约缺失 → 跳过网格建议 + warning，不崩溃。"""
+        record = run_pipeline(
+            target_date="2026-08-06",
+            data_root=self.data_root,
+            integration=self.integration,
+            online_ok=False,
+            asset_pool=self.pool,
+            risk_params=self.risk_params,
+            strategy_contract_path=self.root / "absent.json",
+            grid_suggestion_dir=self.root / "gs_reports",
+        )
+        self.assertEqual(record["status"], "COMPLETED")
+        self.assertTrue(any("缺失" in w for w in record["warnings"]))
+        self.assertIsNone(record["grid_suggestion"], "契约缺失 → grid_suggestion 发布项为 None")
+        run_dir = self.root / "integration" / "systemB_ref" / "20260806"
+        self.assertFalse((run_dir / "grid_suggestion").exists())
+
+    def test_pipeline_grid_suggestion_include_flag_disabled(self) -> None:
+        """include_grid_suggestion=False → 不产出网格建议包。"""
+        record = run_pipeline(
+            target_date="2026-08-06",
+            data_root=self.data_root,
+            integration=self.integration,
+            online_ok=False,
+            asset_pool=self.pool,
+            risk_params=self.risk_params,
+            strategy_contract_path=self.contract_path,
+            grid_suggestion_dir=self.root / "gs_reports",
+            include_grid_suggestion=False,
+        )
+        self.assertEqual(record["status"], "COMPLETED")
+        self.assertIsNone(record["grid_suggestion"], "include_grid_suggestion=False → 发布项为 None")
+        run_dir = self.root / "integration" / "systemB_ref" / "20260806"
+        self.assertFalse((run_dir / "grid_suggestion").exists())

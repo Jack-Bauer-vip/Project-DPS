@@ -376,3 +376,150 @@ class IntegrationDirTests(unittest.TestCase):
         manifest = self.integration.get_manifest()
         self.assertEqual(manifest["newest_portfolio_analysis_run"], "20260801")
         self.assertNotIn("20260810", manifest["runs"])
+
+    # ---- P1-B：网格建议发布（newest_grid_suggestion_run 独立） ----
+
+    def _publish_grid_suggestion(self, run_id: str, *, generated_date: str = "2026-08-13") -> dict:
+        source = self.root / "gs_reports"
+        source.mkdir(parents=True, exist_ok=True)
+        (source / "grid_suggestion.json").write_text(
+            '{"schema": "grid-suggestion-v1", "assets": ["000001.SZ"]}',
+            encoding="utf-8",
+        )
+        (source / "grid_suggestion_table.csv").write_text(
+            "strategy_id,asset_id\ngrid_lh,000001.SZ\n", encoding="utf-8",
+        )
+        return self.integration.publish_run(
+            run_id, source,
+            subdir="grid_suggestion",
+            data_asof="2026-08-12",
+            generated_date=generated_date,
+            cadence=None,
+            package_kind="grid_suggestion",
+        )
+
+    def test_publish_grid_suggestion_keeps_newest_run(self) -> None:
+        """grid_suggestion 包 run 更新独立顶层字段，newest_run 保持日度不变。"""
+        self._write_run("20260810", "2026-08-10")
+        self._publish_grid_suggestion("20260813")
+        manifest = self.integration.get_manifest()
+        self.assertEqual(manifest["newest_run"], "20260810",
+                         "newest_run 必须保持日度最新不变，不被网格建议包顶掉")
+        self.assertEqual(manifest["newest_grid_suggestion_run"], "20260813")
+        self.assertIn("20260813", manifest["runs"])
+        record = manifest["runs"]["20260813"]
+        self.assertIsNone(record.get("cadence"))
+        self.assertEqual(record["package_kind"], "grid_suggestion")
+        self.assertEqual(record["subdir"], "grid_suggestion")
+
+    def test_publish_grid_suggestion_writes_subdir_package(self) -> None:
+        """grid_suggestion 包字节复制到子目录，package.json 写入子目录。"""
+        record = self._publish_grid_suggestion("20260813")
+        self.assertEqual(record["status"], "READY")
+        run_dir = self.root / "systemB_ref" / "20260813"
+        target = run_dir / "grid_suggestion" / "grid_suggestion.json"
+        self.assertTrue(target.exists())
+        self.assertEqual(
+            target.read_bytes(),
+            (self.root / "gs_reports" / "grid_suggestion.json").read_bytes(),
+            "发布文件必须字节级一致",
+        )
+        package = json.loads(
+            (run_dir / "grid_suggestion" / "package.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(package["package_kind"], "grid_suggestion")
+        names = [f["name"] for f in package["files"]]
+        self.assertIn("grid_suggestion/grid_suggestion.json", names)
+        report = self.integration.verify_run("20260813")
+        self.assertTrue(report["ok"])
+
+    def test_prune_recomputes_newest_grid_suggestion(self) -> None:
+        """备份修剪删除最新网格建议包时，newest_grid_suggestion_run 回退到剩余最大值。"""
+        self._publish_grid_suggestion("20260801", generated_date="2026-08-01")
+        self._publish_grid_suggestion("20260810")
+        self.integration.backup_run("20260801")
+        self.integration.backup_run("20260810")
+        self.integration._prune_manifest(["20260810"])
+        manifest = self.integration.get_manifest()
+        self.assertEqual(manifest["newest_grid_suggestion_run"], "20260801")
+        self.assertNotIn("20260810", manifest["runs"])
+
+    def test_manifest_four_pointers_isolated(self) -> None:
+        """日度 / 宏观 / portfolio_analysis / grid_suggestion 四类 run 独立指针。"""
+        self._write_run("20260810", "2026-08-10")
+        self._publish_macro("20260811")
+        self._publish_portfolio("20260812")
+        self._publish_grid_suggestion("20260813")
+        manifest = self.integration.get_manifest()
+        self.assertEqual(manifest["newest_run"], "20260810")
+        self.assertEqual(manifest["newest_macro_monitoring_run"], "20260811")
+        self.assertEqual(manifest["newest_portfolio_analysis_run"], "20260812")
+        self.assertEqual(manifest["newest_grid_suggestion_run"], "20260813")
+        self.assertEqual(len(manifest["runs"]), 4)
+
+    # ---- 同 run_id 多包合并（修复日度→grid_suggestion→grid_recommendation 覆盖） ----
+
+    def _publish_grid_recommendation_to_run(
+        self, run_id: str, *, generated_date: str = "2026-08-14",
+    ) -> dict:
+        source = self.root / "gr_reports"
+        source.mkdir(parents=True, exist_ok=True)
+        (source / "grid_recommendations.json").write_text(
+            '{"schema": "grid-recommendation-v1", "plans": []}', encoding="utf-8",
+        )
+        return self.integration.publish_run(
+            run_id, source,
+            subdir="grid_recommendation",
+            data_asof="2026-08-14",
+            generated_date=generated_date,
+            cadence="weekly",
+            package_kind="grid_recommendation",
+        )
+
+    def test_same_run_id_merges_files_dedup(self) -> None:
+        """同 run_id 日度 + grid_suggestion + grid_recommendation 三次发包合并 files/checksums。"""
+        self._write_run("20260814", "2026-08-14")          # 日度决策包
+        self._publish_grid_suggestion("20260814", generated_date="2026-08-14")  # 网格建议子包
+        self._publish_grid_recommendation_to_run("20260814")                    # 网格推荐组合子包
+        manifest = self.integration.get_manifest()
+        record = manifest["runs"]["20260814"]
+        files = set(record["files"])
+        # 日度 2 文件（_write_run 夹具）+ 网格建议 2 文件 + 网格推荐 1 文件，
+        # 全部保留不互相覆盖。
+        self.assertIn("decision_ref_package.json", files)
+        self.assertIn("assets_metadata.csv", files)
+        self.assertIn("grid_suggestion/grid_suggestion.json", files)
+        self.assertIn("grid_suggestion/grid_suggestion_table.csv", files)
+        self.assertIn("grid_recommendation/grid_recommendations.json", files)
+        self.assertEqual(len(record["files"]), 5)
+        # checksums 按文件合并（覆盖全部文件）。
+        self.assertIn("decision_ref_package.json", record["checksums"])
+        self.assertIn("grid_recommendation/grid_recommendations.json", record["checksums"])
+        # 子包独有字段保留：cadence 来自 grid_recommendation。
+        self.assertEqual(record["cadence"], "weekly")
+        # created_at/updated_at 存在，created_at 保留最早。
+        self.assertIsNotNone(record.get("created_at"))
+        self.assertIsNotNone(record.get("updated_at"))
+        # 指针正确：newest_run 是日度，grid 独立指针各自就位。
+        self.assertEqual(manifest["newest_run"], "20260814")
+        self.assertEqual(manifest["newest_grid_suggestion_run"], "20260814")
+        self.assertEqual(manifest["newest_grid_recommendation_run"], "20260814")
+        # 磁盘校验全绿（verify_run 覆盖 root + 各子目录 package.json）。
+        self.assertTrue(self.integration.verify_run("20260814")["ok"])
+
+    def test_same_run_id_re_publish_keeps_other_pointers(self) -> None:
+        """同 run_id 重发包只更新对应指针，newest_run 仍是最新日度 run。"""
+        self._write_run("20260810", "2026-08-10")
+        self._publish_macro("20260811")                    # 独立 run（宏观）
+        self._publish_grid_suggestion("20260814")          # 独立 run（网格建议）
+        self._publish_grid_recommendation_to_run("20260814")  # 同 run 再发网格推荐
+        manifest = self.integration.get_manifest()
+        self.assertEqual(manifest["newest_run"], "20260810",
+                         "newest_run 必须保持日度最新不变，不被同日网格子包顶掉")
+        self.assertEqual(manifest["newest_macro_monitoring_run"], "20260811")
+        self.assertEqual(manifest["newest_grid_suggestion_run"], "20260814")
+        self.assertEqual(manifest["newest_grid_recommendation_run"], "20260814")
+        # runs["20260814"] 同时含 grid_suggestion 与 grid_recommendation 的文件。
+        files = set(manifest["runs"]["20260814"]["files"])
+        self.assertIn("grid_suggestion/grid_suggestion.json", files)
+        self.assertIn("grid_recommendation/grid_recommendations.json", files)

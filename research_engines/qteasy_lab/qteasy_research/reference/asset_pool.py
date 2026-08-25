@@ -15,11 +15,12 @@ from typing import Any
 import pandas as pd
 
 from qteasy_research.pretrade.providers import (
+    AkshareProvider,
     CompositeProvider,
+    DProvider,
     LocalCsvProvider,
     SqliteProvider,
     TushareProvider,
-    AkshareProvider,
 )
 from qteasy_research.pretrade.symbols import resolve_identity
 from qteasy_research.reference.asset_names import resolve_display_name
@@ -55,9 +56,9 @@ def read_active_assets(path: str | Path | None = None) -> pd.DataFrame:
 
 
 def _build_composite_provider(data_dir: Path) -> CompositeProvider:
-    """构造本地优先的行情 provider 链（Local → SQLite → Tushare → AKShare）。"""
+    """构造本地优先的行情 provider 链（D → Local → SQLite → Tushare → AKShare）。"""
     local = LocalCsvProvider(data_dir)
-    providers = [local]
+    providers = [DProvider(), local]
     if (data_dir / "research.sqlite3").exists() or (data_dir.parent / "research_store").exists():
         try:
             providers.append(SqliteProvider(data_dir.parent / "research_store"))
@@ -142,6 +143,11 @@ def _normalize_price_frame(frame: pd.DataFrame, source: str) -> pd.DataFrame:
             cleaned[column] = None
         else:
             cleaned[column] = pd.to_numeric(cleaned[column], errors="coerce")
+    # OHLC 列保留透传（grid 锚/间距 V2 需要 high/low 算 ATR/ADX/摆动点；
+    # 缺失源（online）降级 None，下游按历史不足处理）。
+    for column in ("open", "high", "low"):
+        if column in cleaned.columns:
+            cleaned[column] = pd.to_numeric(cleaned[column], errors="coerce")
     cleaned = cleaned.dropna(subset=["trade_date", "close"])
     cleaned = cleaned.sort_values("trade_date").drop_duplicates("trade_date", keep="last")
     cleaned = cleaned[cleaned["close"] > 0]
@@ -149,7 +155,8 @@ def _normalize_price_frame(frame: pd.DataFrame, source: str) -> pd.DataFrame:
         cleaned["source"] = "online"
     else:
         cleaned["source"] = "local"
-    return cleaned[["trade_date", "close", "vol", "amount", "source"]]
+    ohlc = [c for c in ("open", "high", "low") if c in cleaned.columns]
+    return cleaned[["trade_date"] + ohlc + ["close", "vol", "amount", "source"]]
 
 
 def report_pool_gaps(aligned: dict[str, pd.DataFrame]) -> list[dict[str, Any]]:

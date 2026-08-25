@@ -16,6 +16,9 @@ import pandas as pd
 
 from qteasy_research.reference.backtest_engine import (
     DEFAULT_GRID_SPREAD,
+    BacktestContract,
+    CostConfig,
+    GridConfig,
     apply_signal_filters,
     build_phase_lookup,
     build_trading_calendar,
@@ -39,6 +42,7 @@ from qteasy_research.reference.backtest_engine import (
     trade_fee,
     write_backtest_outputs,
 )
+from qteasy_research.reference.backtest_engine import _grid_signal
 
 
 def _make_contract_json() -> dict:
@@ -136,11 +140,41 @@ class ContractParseTests(unittest.TestCase):
         self.assertEqual(rules, {"barbell", "grid"})
 
     def test_unknown_schema_raises(self):
-        """schema_version != 1.0 → ValueError。"""
+        """schema_version 不在 {1.0, 1.1} → ValueError。"""
         data = _make_contract_json()
         data["schema_version"] = "2.0"
         with self.assertRaises(ValueError):
             parse_contract(self._write(data))
+
+    def test_schema_1_1_grid_config(self):
+        """schema 1.1 可解析；asset 级 grid_config（锚/两段步长/格数）生效。"""
+        data = _make_contract_json()
+        data["schema_version"] = "1.1"
+        data["shared_config"]["grid"] = {"anchor_level": 5}
+        for strategy in data["strategies"]:
+            if strategy["decision_rule"] == "grid":
+                for asset in strategy["assets"]:
+                    asset["grid_config"] = {
+                        "anchor_price": 1.583,
+                        "regular_spread": 0.012,
+                        "edge_spread": 0.024,
+                        "regular_levels_per_side": 3,
+                        "edge_levels_per_side": 1,
+                        "rating": "recommended",
+                        "source": "B_suggestion",
+                    }
+        contract = parse_contract(self._write(data))
+        self.assertEqual(contract.schema_version, "1.1")
+        self.assertEqual(contract.shared_grid, {"anchor_level": 5})
+        grid = next(s for s in contract.strategies if s.decision_rule == "grid")
+        gcfg = grid.assets[0].grid_config
+        self.assertIsNotNone(gcfg)
+        self.assertEqual(gcfg.anchor_price, 1.583)
+        self.assertEqual(gcfg.regular_spread, 0.012)
+        self.assertEqual(gcfg.edge_spread, 0.024)
+        self.assertEqual(gcfg.regular_levels_per_side, 3)
+        self.assertEqual(gcfg.edge_levels_per_side, 1)
+        self.assertEqual(gcfg.total_levels_per_side, 4)
 
     def test_configured_false_target_none(self):
         """target_weight_configured=false → target_weight=None。"""
@@ -596,6 +630,160 @@ class GridRuleTests(unittest.TestCase):
         # 中枢 = max×0.5：0.1347×0.5×100000 / close(≈1.2) ≈ 5600 股。
         self.assertGreater(buys.iloc[0]["shares"], 5000)
         self.assertLess(buys.iloc[0]["shares"], 6200)
+
+
+class GridConfigTests(unittest.TestCase):
+    """P0-B：契约 assets[].grid_config 两段步长解析 + 回测生效；缺省完全回退旧行为。"""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    @staticmethod
+    def _grid_asset(anchor=1.0, regular_spread=0.05, edge_spread=0.10,
+                    regular_levels=2, edge_levels=2, max_weight=0.2) -> ContractAsset:
+        from qteasy_research.reference.backtest_engine import ContractAsset
+        return ContractAsset(
+            asset_id="A.SZ", role="grid", enabled=True,
+            min_weight=0.0, target_weight=None, max_weight=max_weight,
+            target_weight_configured=False,
+            anchor_price=anchor, regular_spread=regular_spread, edge_spread=edge_spread,
+            regular_levels_per_side=regular_levels, edge_levels_per_side=edge_levels,
+        )
+
+    def _strategy(self, asset: ContractAsset) -> ContractStrategy:
+        from qteasy_research.reference.backtest_engine import ContractStrategy
+        return ContractStrategy(
+            strategy_id="grid_lh", decision_rule="grid", enabled=True,
+            use_target_ratio=False, rebalance_frequency="daily",
+            rebalance_threshold_abs=0.03, asset_rebalance_threshold_abs=0.02,
+            signal_filters=None, preferences={"macro_fit": -0.2}, assets=[asset],
+        )
+
+    def _contract(self, strategy: ContractStrategy) -> BacktestContract:
+        return BacktestContract(
+            schema_version="1.0", contract_type="strategy_rules",
+            generated_at="2026-08-07", generated_by="systemA",
+            strategies=[strategy], cost=CostConfig(100000.0, 0.001, 0.0005),
+        )
+
+    def test_grid_config_parsed_from_contract(self) -> None:
+        """契约 assets[].grid_config → GridConfig，字段与 total_levels_per_side 正确。"""
+        data = _make_contract_json()
+        data["strategies"][1]["assets"][0]["grid_config"] = {
+            "anchor_price": 1.5, "regular_spread": 0.04, "edge_spread": 0.08,
+            "regular_levels_per_side": 2, "edge_levels_per_side": 2,
+        }
+        path = self.root / "strategy_contract.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        contract = parse_contract(path)
+        grid = next(s for s in contract.strategies if s.decision_rule == "grid")
+        cfg = grid.assets[0].grid_config
+        self.assertIsNotNone(cfg)
+        self.assertIsInstance(cfg, GridConfig)
+        self.assertEqual(cfg.anchor_price, 1.5)
+        self.assertEqual(cfg.regular_spread, 0.04)
+        self.assertEqual(cfg.edge_spread, 0.08)
+        self.assertEqual(cfg.regular_levels_per_side, 2)
+        self.assertEqual(cfg.edge_levels_per_side, 2)
+        self.assertEqual(cfg.total_levels_per_side, 4)
+
+    def test_grid_config_incomplete_returns_none(self) -> None:
+        """字段不齐/非法 → grid_config=None（缺省回退旧行为）。"""
+        # 缺 edge_spread
+        asset = self._grid_asset(edge_spread=None)
+        self.assertIsNone(asset.grid_config)
+        # 两段档数合计 0
+        asset2 = self._grid_asset(regular_levels=0, edge_levels=0)
+        self.assertIsNone(asset2.grid_config)
+        # 负档距
+        asset3 = self._grid_asset(regular_spread=-0.05)
+        self.assertIsNone(asset3.grid_config)
+        # 合法 → GridConfig
+        asset4 = self._grid_asset()
+        self.assertIsNotNone(asset4.grid_config)
+
+    def test_grid_signal_two_segment_steps(self) -> None:
+        """两段步长生效：(1+regular)^regular_n × (1+edge)^edge_n。"""
+        asset = self._grid_asset(anchor=1.0, regular_spread=0.05, edge_spread=0.10,
+                                 regular_levels=2, edge_levels=2, max_weight=0.2)
+        strategy = self._strategy(asset)
+        contract = self._contract(strategy)
+        prices = pd.DataFrame({"A.SZ": [1.25]}, index=pd.DatetimeIndex(["2024-01-03"]))
+        date = pd.Timestamp("2024-01-03")
+        grid_anchor = {"A.SZ": 1.0}
+        grid_index = {"A.SZ": 0}
+        orders = _grid_signal(
+            strategy, prices, date, {"A.SZ": 1000}, 100000.0,
+            contract, {"A.SZ": 0.05}, grid_anchor, grid_index, lot=1,
+        )
+        self.assertEqual(len(orders), 1)
+        self.assertEqual(orders[0]["side"], "SELL")
+        self.assertEqual(orders[0]["asset_id"], "A.SZ")
+        # raw=(1.25-1.0)/0.05=5.0 → 常规 2 档用 0.05、边缘 3 档用 0.10
+        expected_anchor = 1.0 * (1.05 ** 2) * (1.10 ** 3)
+        self.assertAlmostEqual(grid_anchor["A.SZ"], expected_anchor, places=6)
+        self.assertEqual(grid_index["A.SZ"], 5)
+        # step_notional = 0.2*100000/(2*4)=2500 → 2500/1.25=2000
+        self.assertEqual(orders[0]["shares"], 2000)
+
+    def test_grid_signal_default_fallback_single_spread(self) -> None:
+        """缺省（无 grid_config）：单档距、GRID_LEVELS_PER_SIDE=4。"""
+        from qteasy_research.reference.backtest_engine import ContractAsset
+        asset = ContractAsset(
+            asset_id="A.SZ", role="grid", enabled=True,
+            min_weight=0.0, target_weight=None, max_weight=0.2,
+            target_weight_configured=False,
+        )
+        strategy = self._strategy(asset)
+        contract = self._contract(strategy)
+        prices = pd.DataFrame({"A.SZ": [1.25]}, index=pd.DatetimeIndex(["2024-01-03"]))
+        date = pd.Timestamp("2024-01-03")
+        grid_anchor = {"A.SZ": 1.0}
+        grid_index = {"A.SZ": 0}
+        orders = _grid_signal(
+            strategy, prices, date, {"A.SZ": 1000}, 100000.0,
+            contract, {"A.SZ": 0.05}, grid_anchor, grid_index, lot=1,
+        )
+        self.assertEqual(len(orders), 1)
+        self.assertEqual(orders[0]["side"], "SELL")
+        # 缺省单档距（edge_spread=regular_spread）：(1.05)^5
+        self.assertAlmostEqual(grid_anchor["A.SZ"], 1.0 * (1.05 ** 5), places=6)
+        self.assertEqual(grid_index["A.SZ"], 5)
+        self.assertEqual(orders[0]["shares"], 2000)
+
+    def test_run_backtest_uses_configured_anchor(self) -> None:
+        """契约带 grid_config.anchor_price → 锚=配置中轴（≠首日收盘），首日即触发。"""
+        data = _make_contract_json()
+        data["strategies"][1]["assets"][0]["grid_config"] = {
+            "anchor_price": 1.5, "regular_spread": 0.05, "edge_spread": 0.10,
+            "regular_levels_per_side": 2, "edge_levels_per_side": 2,
+        }
+        path = self.root / "strategy_contract.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        contract = parse_contract(path)
+        dates = pd.date_range("2024-01-02", periods=10, freq="B")
+        frames = {
+            "159985.SZ": pd.DataFrame({
+                "trade_date": dates.strftime("%Y-%m-%d"), "close": [1.30] * 10,
+            }),
+            "513520.SH": pd.DataFrame({
+                "trade_date": dates.strftime("%Y-%m-%d"), "close": [1.20] * 10,
+            }),
+        }
+        _write_fund_daily(self.root, frames)
+        result = run_backtest(
+            next(s for s in contract.strategies if s.decision_rule == "grid"),
+            contract, data_root=self.root, start="2024-01-02", lot=1,
+            online_ok=False, phase_lookup={}, grid_reference={},
+        )
+        self.assertEqual(result.status, "OK")
+        # 锚=1.5 > 首日收盘 1.3 → raw=-2.67 → BUY 2 档；缺省（锚=首日收盘）首日不触发。
+        buys = result.trades[result.trades["side"] == "BUY"]
+        self.assertFalse(buys.empty, "配置中轴高于首日收盘 → 应有 BUY 档位触发")
 
 
 class MacroAdaptationTests(unittest.TestCase):

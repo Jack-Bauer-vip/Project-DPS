@@ -40,7 +40,44 @@ def parse_args() -> argparse.Namespace:
                         help="dry-run 输出目录（默认 outputs/）")
     parser.add_argument("--include-stress", dest="include_stress", action="store_true",
                         help="计算宏观压力情景损益并填充 macro_stress（默认不计算）")
+    parser.add_argument("--no-grid-suggestion", dest="include_grid_suggestion", action="store_false",
+                        default=True, help="跳过网格建议引擎（P1-B，默认计算）")
+    parser.add_argument("--include-grid-suggestion", dest="include_grid_suggestion", action="store_true",
+                        help="计算网格建议（P1-B，默认）")
+    parser.add_argument("--strategy-contract-path", type=Path, default=None,
+                        help="策略规则契约路径（默认 config.STRATEGY_CONTRACT_PATH；测试注入用）")
+    parser.add_argument("--grid-suggestion-dir", type=Path, default=None,
+                        help="网格建议包本地源目录（默认 config.GRID_SUGGESTION_DIR；测试注入用）")
+    parser.add_argument("--no-grid-recommendation", dest="include_grid_recommendation", action="store_false",
+                        default=True, help="跳过网格推荐组合（B2/B3，默认计算）")
+    parser.add_argument("--include-grid-recommendation", dest="include_grid_recommendation", action="store_true",
+                        help="计算网格推荐组合（B2/B3，默认）")
+    parser.add_argument("--grid-recommendation-dir", type=Path, default=None,
+                        help="网格推荐组合包本地源目录（默认 config.GRID_RECOMMENDATION_DIR；测试注入用）")
     return parser.parse_args()
+
+
+def _notify_publish(record: dict) -> None:
+    """发包结果飞书只读推送（不阻断；未配置 URL / 异常静默跳过）。
+
+    所有发包路径（refresh_fund_daily --publish、refresh_and_publish.bat、手动
+    run_reference_pipeline --real）最终都经 main() 的 real 分支汇聚到此，一处覆盖全部入口。
+    """
+    try:
+        from qteasy_research.common.feishu_notify import feishu_send
+        run_id = record.get("run_id", "?")
+        ok = record.get("verify", {}).get("ok") if record.get("verify") else None
+        status = record.get("status", "?")
+        files = record.get("files", [])
+        if status == "COMPLETED" and ok:
+            feishu_send("【B】发包成功",
+                        f"run={run_id} verify.ok=True（{len(files)} 文件）")
+        else:
+            feishu_send("【B】发包异常",
+                        f"run={run_id} status={status} verify.ok={ok} "
+                        f"warnings={len(record.get('warnings', []))}")
+    except Exception:
+        pass
 
 
 def main(args: argparse.Namespace) -> dict:
@@ -51,8 +88,13 @@ def main(args: argparse.Namespace) -> dict:
             asset_pool=args.asset_pool,
             output_root=args.output_root,
             include_stress=args.include_stress,
+            include_grid_suggestion=args.include_grid_suggestion,
+            include_grid_recommendation=args.include_grid_recommendation,
+            strategy_contract_path=args.strategy_contract_path,
+            grid_suggestion_dir=args.grid_suggestion_dir,
+            grid_recommendation_dir=args.grid_recommendation_dir,
         )
-        print(f"[dry-run] 三件套写入：{record['output_root']}")
+        print(f"[dry-run] 产出写入：{record['output_root']}")
         for filename in record["files"]:
             print(f"  - {Path(record['output_root']) / filename}")
         print(f"[dry-run] status={record['status']} warnings={len(record['warnings'])}")
@@ -67,10 +109,24 @@ def main(args: argparse.Namespace) -> dict:
         asset_pool=args.asset_pool,
         integration=integration,
         include_stress=args.include_stress,
+        include_grid_suggestion=args.include_grid_suggestion,
+        include_grid_recommendation=args.include_grid_recommendation,
+        strategy_contract_path=args.strategy_contract_path,
+        grid_suggestion_dir=args.grid_suggestion_dir,
+        grid_recommendation_dir=args.grid_recommendation_dir,
     )
     print(f"[real] 共享目录写入：{integration.root / 'systemB_ref' / record['run_id']}")
+    if record.get("grid_suggestion"):
+        published = record["grid_suggestion"]
+        print(f"[real] grid_suggestion 发布：{integration.root / 'systemB_ref' / record['run_id'] / 'grid_suggestion'}")
+        print(f"[real]   package_kind={published.get('package_kind')} status={published.get('status')}")
+    if record.get("grid_recommendation"):
+        published = record["grid_recommendation"]
+        print(f"[real] grid_recommendation 发布：{integration.root / 'systemB_ref' / record['run_id'] / 'grid_recommendation'}")
+        print(f"[real]   package_kind={published.get('package_kind')} cadence={published.get('cadence')} status={published.get('status')}")
     print(f"[real] status={record['status']} verify.ok={record['verify'].get('ok')} "
           f"warnings={len(record['warnings'])}")
+    _notify_publish(record)
     return record
 
 

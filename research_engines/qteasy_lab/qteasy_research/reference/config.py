@@ -67,6 +67,32 @@ MACRO_MONITOR_DIR = PROJECT_ROOT / "reports" / "macro_monitoring"
 # B 侧网格参考表（dry-run 产物 outputs/），网格档距三级取值的第二级来源。
 GRID_REFERENCE_PATH = OUTPUT_DIR / "grid_reference_table.csv"
 
+# ---- 网格建议引擎（P1-B）：适合度 / 中轴 / 两段步长 / 相关性 ----
+# B 侧网格建议输出目录（只写 B 本地 reports/，M-003；发布共享目录用 subdir）。
+GRID_SUGGESTION_DIR = PROJECT_ROOT / "reports" / "grid_suggestion"
+GRID_SUGGESTION_SUBDIR = "grid_suggestion"
+GRID_SUGGESTION_SCHEMA_VERSION = "grid-suggestion-v2"
+# suitability 分级阈值：score ≥ SUITABLE→suitable，≥MARGINAL→marginal，否则 not_suitable。
+SUITABLE = 70.0
+MARGINAL = 45.0
+# 两段步长：edge_spread = regular × max(EDGE_SPREAD_MULTIPLIER_DEFAULT, cone_p95/p50)，
+# 上限 EDGE_SPREAD_MAX_MULTIPLE × regular。
+EDGE_SPREAD_MULTIPLIER_DEFAULT = 2.0
+EDGE_SPREAD_MAX_MULTIPLE = 4.0
+# 相关性：|corr| > CORR_HIGH_THRESHOLD → high_corr_pair；avg_corr ≥ HIGH→high、
+# ≥ CORR_MODERATE_THRESHOLD→moderate、其余 low（redundancy_note）。
+CORR_HIGH_THRESHOLD = 0.6
+CORR_MODERATE_THRESHOLD = 0.4
+
+# ---- 网格推荐组合（B2/B3）：组合级建议（weekly cadence，REFERENCE_ONLY）----
+# B 侧网格推荐输出目录（只写 B 本地 reports/；发布共享目录用 subdir）。
+GRID_RECOMMENDATION_DIR = PROJECT_ROOT / "reports" / "grid_recommendation"
+GRID_RECOMMENDATION_SUBDIR = "grid_recommendation"
+GRID_RECOMMENDATION_SCHEMA_VERSION = "grid-recommendation-v1"
+# 周度包新鲜度阈值：data_asof 距今超过 10 天视为过期（weekly cadence，非日度）。
+GRID_RECOMMENDATION_MAX_AGE_DAYS = 10
+GRID_RECOMMENDATION_CADENCE = "weekly"
+
 # ---- 阶段三：压力模拟器情景幅度 ----
 # DGS30 月变化 ≥ +0.50（50bp）视为强加息压力（rate_up 的 states 判定是 ≥+0.20，即 20bp）。
 STRESS_RATE_UP_BP = 0.50

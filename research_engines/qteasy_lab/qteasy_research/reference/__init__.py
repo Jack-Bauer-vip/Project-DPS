@@ -18,7 +18,18 @@ from qteasy_research.reference.config import (
     SYSTEM_A_ROOT,
 )
 from qteasy_research.reference.duration_phase import build_duration_phase
+from qteasy_research.reference.grid_recommendation import (
+    build_grid_recommendation,
+    capital_metrics,
+    portfolio_metrics,
+    risk_annotation,
+    spacing_reference_triplet,
+)
 from qteasy_research.reference.grid_reference import build_grid_reference
+from qteasy_research.reference.grid_suggestion import (
+    build_grid_suggestion,
+    build_grid_suggestion_table,
+)
 from qteasy_research.reference.red_flag import assess_red_flags, load_risk_thresholds
 from qteasy_research.reference.hedge_efficiency import build_hedge_efficiency
 from qteasy_research.reference.human_machine_compare import (
@@ -148,6 +159,11 @@ __all__ = [
     "build_duration_phase",
     # grid_reference（B1-1）
     "build_grid_reference",
+    # grid_recommendation（B2/B3：网格推荐组合 + 间距参考）
+    "build_grid_recommendation", "capital_metrics", "portfolio_metrics",
+    "risk_annotation", "spacing_reference_triplet",
+    # grid_suggestion（P1-B）
+    "build_grid_suggestion", "build_grid_suggestion_table",
     # hedge_efficiency（B1-2）
     "build_hedge_efficiency",
     # human_machine_compare（人机对比月报）
