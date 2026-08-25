@@ -31,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     research.add_argument("--data-mode", choices=["direct", "hybrid", "local"], default="direct")
     research.add_argument("--no-evidence", action="store_true", help="关闭联网定性证据补研")
     research.add_argument("--local-data-provider", default=None)
+    research.add_argument("--no-knowledge-ref", action="store_true", help="关闭 K 知识库研究起点参考查询")
     research.add_argument("--output-dir", default=None)
     research.add_argument("--project-id", default=None)
     research.add_argument("--update-policy", choices=["reuse", "check_update", "refresh", "force_refresh"], default="reuse")
@@ -89,6 +90,7 @@ def main(argv: list[str] | None = None) -> int:
             project_id=args.project_id,
             update_policy=args.update_policy,
             as_of_date=args.as_of_date,
+            knowledge_reference=not args.no_knowledge_ref,
         )
         print(result.report)
         print(f"\n报告文件：{result.artifacts.get('report', '未生成')}")

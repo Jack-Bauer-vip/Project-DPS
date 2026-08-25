@@ -260,6 +260,46 @@ def render_markdown(result: dict[str, Any]) -> str:
         "",
         f"**数据完整度：** {sample_days} 个有效收益样本，缺失项：{_cell('、'.join(map(str, result.get('missing_items', []))) if result.get('missing_items') else '无')}。",
         "",
+    ])
+
+    # K 知识参考（研究起点）：研究开始时先查本地知识库，把已有知识卡结论作为起点参考。
+    kb_ref = result.get("knowledge_reference") or {}
+    lines.append("## K 知识参考（研究起点）")
+    lines.append("")
+    if not kb_ref.get("available"):
+        reason = kb_ref.get("reason") or "K 知识库不可用"
+        if reason == "K 知识参考已关闭":
+            lines.append("本次研究未启用 K 知识参考，无知识库起点参考；研究主流程不受影响。")
+        else:
+            lines.append(
+                f"本次研究开始时查询本地知识库（Knowledge Weaver @8000）未成功：{_cell(reason)}。"
+                "K 知识参考不影响研究主流程，本次无知识库起点参考。"
+            )
+    elif not kb_ref.get("cards"):
+        queries = "、".join(kb_ref.get("queries") or [])
+        lines.append(
+            f"未在本地知识库检索到与查询词「{_cell(queries)}」相关的知识卡，本次研究无 K 起点参考。"
+        )
+    else:
+        queries = "、".join(kb_ref.get("queries") or [])
+        cards = kb_ref.get("cards") or []
+        lines.append(
+            "研究开始时先检索本地知识库（Knowledge Weaver @8000），以下知识卡结论作为**研究起点参考**；"
+            "仅供阅读参考、避免重复劳动，不构成交易建议，不自动进入资产池或策略。"
+        )
+        lines.append("")
+        lines.append(f"> 查询词：{_cell(queries)} ｜ 命中 {len(cards)} 张")
+        lines.append("")
+        lines.append("| 卡 ID | 标题 | 分类 | 摘要要点 |")
+        lines.append("|---|---|---|---|")
+        for card in cards:
+            lines.append(
+                f"| `{_cell(card.get('card_id'))}` | {_cell(card.get('title'))} | "
+                f"{_cell(card.get('category'))} | {_cell(card.get('summary'))} |"
+            )
+    lines.append("")
+
+    lines.extend([
         "## 1. 标的身份与研究范围",
         "",
         "| 项目 | 内容 |",

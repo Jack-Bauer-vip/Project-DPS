@@ -14,10 +14,12 @@ import pandas as pd
 
 from qteasy_research.pretrade.metrics import analyze_benchmark, analyze_price_history
 from qteasy_research.pretrade.factors import analyze_asset_factors
+from qteasy_research.pretrade.knowledge_reference import query_knowledge_reference
 from qteasy_research.pretrade.llm import ResearchPrompt, build_llm_provider
 from qteasy_research.pretrade.providers import (
     AkshareProvider,
     CompositeProvider,
+    DProvider,
     LocalCsvProvider,
     ResearchSnapshotProvider,
     SqliteProvider,
@@ -86,6 +88,7 @@ def _cache_key(config: ResearchConfig, local_dir: Path) -> str:
         "transaction_cost": config.transaction_cost,
         "indicator_config": config.indicator_config,
         "technical_formula_version": FORMULA_VERSION,
+        "knowledge_reference": config.knowledge_reference,
         "files": files,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
@@ -145,11 +148,11 @@ def _provider_chain(
     database: SqliteProvider,
 ) -> CompositeProvider:
     if data_mode == "local":
-        providers = [database, local, snapshot]
+        providers = [DProvider(), database, local, snapshot]
     elif data_mode == "hybrid":
-        providers = [database, local, snapshot, AkshareProvider(), TushareProvider()]
+        providers = [DProvider(), database, local, snapshot, AkshareProvider(), TushareProvider()]
     else:
-        providers = [AkshareProvider(), TushareProvider(), database, local, snapshot]
+        providers = [DProvider(), AkshareProvider(), TushareProvider(), database, local, snapshot]
     return CompositeProvider(providers)
 
 
@@ -172,6 +175,7 @@ def run_instrument_research(
     as_of_date: str | None = None,
     factor_params: dict[str, Any] | None = None,
     transaction_cost: dict[str, Any] | None = None,
+    knowledge_reference: bool = True,
     progress_callback: Callable[[StageRecord], None] | None = None,
 ) -> ResearchRunResult:
     """执行一个标的的可复现投前研究任务。"""
@@ -202,6 +206,7 @@ def run_instrument_research(
         as_of_date=as_of_date,
         factor_params=factor_params or {},
         transaction_cost=transaction_cost or {},
+        knowledge_reference=knowledge_reference,
     )
     local = LocalCsvProvider()
     store = ResearchStore(output_dir or _default_root())
@@ -311,6 +316,41 @@ def run_instrument_research(
         if result.asset_identity.asset_type == "UNKNOWN":
             result.hard_blocks.append("无法确定标的类型")
         _add_stage(result, store, "identifying", "SUCCESS", f"识别为 {result.asset_identity.asset_type}")
+
+        # K 知识参考（研究起点）：先查本地知识库有无相关主题/知识卡，再继续主流程。
+        # 降级铁律：K 不可用/异常/空结果都不阻断研究；只用只读方法，不写 K。
+        _add_stage(result, store, "knowledge_reference", ResearchStatus.KNOWLEDGE_REFERENCE.value)
+        ref: dict[str, Any] = {
+            "available": False,
+            "reason": "K 知识参考已关闭",
+            "queries": [],
+            "cards": [],
+            "hit_count": 0,
+        }
+        if config.knowledge_reference:
+            try:
+                ref = query_knowledge_reference(
+                    code=result.asset_identity.code,
+                    name=result.asset_identity.name,
+                )
+            except Exception as exc:  # noqa: BLE001 - 任何异常都降级，不阻断研究
+                ref = {
+                    "available": False,
+                    "reason": f"K 知识库查询异常：{type(exc).__name__}: {exc}",
+                    "queries": [],
+                    "cards": [],
+                    "hit_count": 0,
+                }
+        result.knowledge_reference = _json_safe(ref)
+        if not ref.get("available"):
+            _add_stage(result, store, "knowledge_reference", "PARTIAL", f"K 不可用：{ref.get('reason') or '未探活成功'}")
+        elif ref.get("hit_count", 0) > 0:
+            _add_stage(result, store, "knowledge_reference", "SUCCESS",
+                       f"K 知识参考命中 {ref['hit_count']} 张知识卡",
+                       {"hit_count": ref["hit_count"],
+                        "card_ids": [card.get("card_id") for card in ref.get("cards") or []]})
+        else:
+            _add_stage(result, store, "knowledge_reference", "SUCCESS", "K 知识库无相关参考")
 
         _add_stage(result, store, "fetching_data", ResearchStatus.FETCHING_DATA.value)
         price = preflight_price or _apply_as_of(provider.get_price_history(result.asset_identity), as_of_date)

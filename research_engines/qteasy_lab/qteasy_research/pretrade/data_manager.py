@@ -21,6 +21,7 @@ import numpy as np
 from qteasy_research.pretrade.factor_scoring import formula_md5
 from qteasy_research.pretrade.providers import (
     AkshareProvider,
+    DProvider,
     LocalCsvProvider,
     ProviderData,
     TushareProvider,
@@ -194,7 +195,7 @@ class DataManager:
             return [HttpMiddlewareProvider()]
         # CSV is imported explicitly as a bootstrap action; it is not treated
         # as a competing live source during an API update.
-        return [AkshareProvider(), TushareProvider()]
+        return [DProvider(), AkshareProvider(), TushareProvider()]
 
     def _identity(self, code: str):
         return self.local.resolve(code)

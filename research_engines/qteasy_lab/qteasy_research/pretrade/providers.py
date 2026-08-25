@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -444,6 +445,99 @@ class AkshareProvider:
 
     def get_benchmark_history(self, code: str) -> ProviderData:
         return ProviderData(source=self.name, message="AKShare 基准适配尚未提供")
+
+
+class DProvider:
+    """Bern 数据中台（D）行情 Provider：纯后台首选源，失败自动降级原链。
+
+    服务 B 的 A 股 ETF / 指数日线（统一数据知识层·第二刀 §5.3）。行情
+    命中即 ``official=True``；``get_metadata`` 不提供 ETF 静态资料（D 只
+    覆盖行情，静态资料由原链继续服务）。
+    """
+
+    name = "bern_data"
+
+    # D 分发接口未指定 limit 时仅返回最近 200 条；研究需全量历史，取接口上限。
+    _DEFAULT_LIMIT = 100000
+
+    def __init__(self, base_url: str | None = None, api_key: str | None = None) -> None:
+        self.base_url = (
+            base_url
+            or os.getenv("D_BASE_URL", "")
+            or os.getenv("BERN_DATA_BASE_URL", "")
+            or "http://127.0.0.1:8765/api/v1"
+        ).rstrip("/")
+        self.api_key = (
+            api_key
+            or os.getenv("D_API_KEY", "")
+            or os.getenv("BERN_DATA_API_KEY", "")
+            or os.getenv("API_TOKEN", "")
+        ).strip()
+
+    def _get_json(self, path: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        import requests
+
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        url = f"{self.base_url}{path}"
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            raise ProviderUnavailable(f"Bern 数据中台不可用：{type(exc).__name__}: {exc}") from exc
+        if not isinstance(payload, dict) or payload.get("code") != 200:
+            raise ProviderUnavailable(f"Bern 数据中台返回异常：{payload}")
+        return payload.get("data") or []
+
+    def _d_to_frame(self, records: list[dict[str, Any]], ts_code: str) -> pd.DataFrame:
+        frame = pd.DataFrame(records or [])
+        frame = frame.rename(columns={"date": "trade_date", "volume": "vol"})
+        frame["ts_code"] = ts_code
+        return _normalize_frame(frame)
+
+    def _to_d_symbol(self, code: str) -> str:
+        """``000300.SH → sh000300``；SPY/TLT/GLD/HSI 等原样大写。"""
+        raw = (code or "").strip()
+        match = re.match(r"^(\d{6})[.](SH|SZ|BJ)$", raw.upper())
+        if match:
+            return f"{match.group(2).lower()}{match.group(1)}"
+        return raw.upper()
+
+    def get_price_history(self, identity: AssetIdentity) -> ProviderData:
+        table = "fund_etf_daily" if identity.asset_type in {"ETF", "LOF", "QDII"} else "stock_daily"
+        code = identity.code.split(".", 1)[0]
+        records = self._get_json(f"/data/{table}", {"code": code, "limit": self._DEFAULT_LIMIT})
+        frame = self._d_to_frame(records, identity.code)
+        if frame.empty:
+            return ProviderData(source=self.name, message=f"Bern 数据中台没有 {identity.code} 行情")
+        return ProviderData(
+            data=frame.reset_index(drop=True),
+            source=self.name,
+            as_of=frame["trade_date"].max().strftime("%Y-%m-%d"),
+            message="Bern 数据中台历史行情",
+            official=True,
+            request={"provider": self.name, "table": table, "code": code},
+            fields_returned=list(frame.columns),
+        )
+
+    def get_benchmark_history(self, code: str) -> ProviderData:
+        symbol = self._to_d_symbol(code)
+        records = self._get_json("/data/index_daily", {"code": symbol, "limit": self._DEFAULT_LIMIT})
+        frame = self._d_to_frame(records, code)
+        if frame.empty:
+            return ProviderData(source=self.name, message=f"Bern 数据中台没有基准 {code}")
+        return ProviderData(
+            data=frame.reset_index(drop=True),
+            source=self.name,
+            as_of=frame["trade_date"].max().strftime("%Y-%m-%d"),
+            message="Bern 数据中台基准行情",
+            official=True,
+            request={"provider": self.name, "table": "index_daily", "symbol": symbol},
+            fields_returned=list(frame.columns),
+        )
+
+    def get_metadata(self, identity: AssetIdentity) -> ProviderData:
+        return ProviderData(source=self.name, message="D 不提供 ETF 静态资料")
 
 
 class CompositeProvider:

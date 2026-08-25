@@ -9,6 +9,7 @@ from typing import Any
 
 class ResearchStatus(StrEnum):
     IDENTIFYING = "IDENTIFYING"
+    KNOWLEDGE_REFERENCE = "KNOWLEDGE_REFERENCE"
     FETCHING_DATA = "FETCHING_DATA"
     DATA_QUALITY_CHECK = "DATA_QUALITY_CHECK"
     QUANTITATIVE_ANALYSIS = "QUANTITATIVE_ANALYSIS"
@@ -65,6 +66,7 @@ class ResearchConfig:
     as_of_date: str | None = None
     factor_params: dict[str, Any] = field(default_factory=dict)
     transaction_cost: dict[str, Any] = field(default_factory=dict)
+    knowledge_reference: bool = True
 
 
 @dataclass
@@ -95,6 +97,7 @@ class ResearchRunResult:
     quantitative_metrics: dict[str, Any] = field(default_factory=dict)
     benchmark_analysis: dict[str, Any] = field(default_factory=dict)
     instrument_analysis: dict[str, Any] = field(default_factory=dict)
+    knowledge_reference: dict[str, Any] = field(default_factory=dict)
     macro_analysis: dict[str, Any] = field(default_factory=dict)
     portfolio_fit: dict[str, Any] = field(default_factory=dict)
     strategy_fit: dict[str, Any] = field(default_factory=dict)

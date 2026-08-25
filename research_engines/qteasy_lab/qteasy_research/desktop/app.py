@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import sys
 from pathlib import Path
 
 from qteasy_research.desktop.settings import load_settings, save_settings
@@ -11,12 +12,13 @@ from qteasy_research.desktop.settings import load_settings, save_settings
 
 def launch() -> int:
     try:
-        from PySide6.QtCore import QThread, Qt, Signal
+        from PySide6.QtCore import QProcess, QThread, Qt, Signal
         from PySide6.QtGui import QAction, QFont
         from PySide6.QtWidgets import (
             QApplication,
             QCheckBox,
             QComboBox,
+            QDialog,
             QDoubleSpinBox,
             QFileDialog,
             QFormLayout,
@@ -35,6 +37,8 @@ def launch() -> int:
             QStackedWidget,
             QTabWidget,
             QTextBrowser,
+            QTextEdit,
+            QToolBar,
             QVBoxLayout,
             QWidget,
         )
@@ -164,6 +168,16 @@ def launch() -> int:
             self.setCentralWidget(root)
             nav.currentRowChanged.connect(self.pages.setCurrentIndex)
 
+            # 一键发包（B→A 流水线：从 D 中台刷新行情 + 校验 + 发包写 systemB_ref）
+            self.publish_toolbar = QToolBar("发布", self)
+            self.publish_toolbar.setMovable(False)
+            self.publish_button = QPushButton("一键发包")
+            self.publish_button.setToolTip("从 D 中台刷新行情，校验通过后调用 run_reference_pipeline.py --real 发包")
+            self.publish_button.clicked.connect(self._handle_publish_click)
+            self.publish_toolbar.addWidget(self.publish_button)
+            self.addToolBar(self.publish_toolbar)
+            self._publish_process = None
+
             self.project_page = self._build_project_page()
             self.new_page = self._build_new_page()
             self.factor_page = FactorResearchPage(store_dir, self)
@@ -201,6 +215,71 @@ def launch() -> int:
                 QLabel#dataTitle { color: #172525; font-size: 22px; font-weight: 700; }
             """)
             self.refresh_projects()
+
+        def _handle_publish_click(self):
+            """一键发包：确认 → QProcess 跑 refresh_fund_daily.py --publish（刷新D行情+校验+发包）。"""
+            if self._publish_process is not None and self._publish_process.state() != QProcess.ProcessState.NotRunning:
+                return
+            ret = QMessageBox.question(
+                self,
+                "一键发包",
+                "确认发包？\n将从 D 中台刷新行情，校验通过后调用 run_reference_pipeline.py --real 写入 systemB_ref 共享目录（B→A 流水线）。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return
+
+            # 日志对话框（非模态，可边跑边看其他页面）
+            dlg = QDialog(self)
+            dlg.setWindowTitle("一键发包日志")
+            dlg.resize(780, 460)
+            layout = QVBoxLayout(dlg)
+            log = QTextEdit()
+            log.setReadOnly(True)
+            log.setPlaceholderText("正在启动刷新+发包…")
+            layout.addWidget(log)
+            close_button = QPushButton("关闭")
+            close_button.setEnabled(False)
+            layout.addWidget(close_button, alignment=Qt.AlignmentFlag.AlignRight)
+            close_button.clicked.connect(dlg.close)
+            dlg.setModal(False)
+            dlg.show()
+            self._publish_dialog = dlg
+            self._publish_log = log
+            self._publish_close = close_button
+
+            self.publish_button.setEnabled(False)
+            self.publish_button.setText("发包中…")
+
+            project_root = str(Path(__file__).resolve().parents[2])
+            proc = QProcess(self)
+            proc.setWorkingDirectory(project_root)
+            proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+            proc.readyReadStandardOutput.connect(lambda: self._append_publish_output(proc))
+            proc.finished.connect(lambda code, status: self._publish_finished(code))
+            proc.start(sys.executable, ["-X", "utf8", "scripts/refresh_fund_daily.py", "--publish"])
+            self._publish_process = proc
+
+        def _append_publish_output(self, proc: QProcess):
+            """实时回显子进程 stdout/stderr（MergedChannels 合一）。"""
+            data = bytes(proc.readAllStandardOutput())
+            text = data.decode("utf-8", errors="replace")
+            if text.strip():
+                self._publish_log.append(text.rstrip())
+
+        def _publish_finished(self, code: int):
+            """子进程结束：恢复按钮、弹结果提示。"""
+            self.publish_button.setEnabled(True)
+            self.publish_button.setText("一键发包")
+            self._publish_close.setEnabled(True)
+            tail = self._publish_log.toPlainText()[-400:]
+            if code == 0:
+                self._publish_log.append("—— 发包完成（退出码 0）")
+                QMessageBox.information(self, "一键发包", "发包成功完成，已写入 systemB_ref 共享目录。\n\n尾部日志：\n" + tail)
+            else:
+                self._publish_log.append(f"—— 发包失败（退出码 {code}）")
+                QMessageBox.warning(self, "一键发包", f"发包失败（退出码 {code}）。\n常见原因：D 中台(8765)未启动 / 行情校验未通过。\n\n尾部日志：\n{tail}")
 
         def _build_project_page(self):
             page = QWidget()

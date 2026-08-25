@@ -184,10 +184,14 @@ class TechnicalUpdateTests(unittest.TestCase):
             def get_benchmark_history(self, code):
                 return ProviderData(data=self.frame[["trade_date", "close"]].copy(), source=self.name, as_of=self.frame["trade_date"].max().strftime("%Y-%m-%d"))
 
-        with tempfile.TemporaryDirectory() as directory, patch(
-            "qteasy_research.pretrade.orchestrator.LocalCsvProvider",
-            FakeLocalCsvProvider,
-        ):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch("qteasy_research.pretrade.orchestrator.LocalCsvProvider", FakeLocalCsvProvider), \
+                patch("qteasy_research.pretrade.orchestrator.DProvider") as mock_d_provider:
+            # 隔离 D 数据中台：本测试只验证「本地数据更新 → check_update 出新版本」，
+            # 不让 D（首位 provider）抢先命中导致本地帧变更被掩盖。
+            mock_d_provider.return_value.get_price_history.return_value = ProviderData()
+            mock_d_provider.return_value.get_benchmark_history.return_value = ProviderData()
+            mock_d_provider.return_value.get_metadata.return_value = ProviderData()
             project = create_research_project("fixture", "518880.SH", output_dir=directory)
             first = run_instrument_research(
                 "518880.SH",
